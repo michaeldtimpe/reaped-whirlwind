@@ -76,7 +76,7 @@ def main():
         arr = np.stack([rch, vch]).astype(np.float32)
         name = Path(r["refl"]).stem.replace(f"_{ 'N0B' }", "") + ".npy"
         np.save(tdir / name, arr)
-        out_rows.append({k: r[k] for k in ("event_id","label","class","station","mag","date","scan_time","dist_km")}
+        out_rows.append({k: r.get(k, "") for k in ("event_id","label","class","subtype","station","mag","date","scan_time","dist_km")}
                         | {"tensor": f"tensors/{name}", "has_velocity": int(bool(r["vel"]))})
         if (rch > 0).any(): refl_means.append(float(rch[rch > 0].mean()))
         if r["vel"] and (vch > 0).any(): vel_means.append(float(vch[vch > 0].mean()))
