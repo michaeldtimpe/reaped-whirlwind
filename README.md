@@ -9,6 +9,15 @@ Docker projects, now unified into one compose stack with one-command deploy.
 > ingests. The model (Part B/C) will stay permanently labeled *experimental*. See
 > `docs/MODEL_CARD.md` for what it can and cannot do.
 
+## Status / resume
+- **Part A (unified stack)** — done & deployed on the kappa NAS.
+- **Part B (tornado CNN)** — tooling done & smoke-tested; the full data collection + training +
+  go/no-go evaluation are the **next action**, to run on the analysis machine.
+- **Part C (live inference + email alerts)** — not started; gated on a passing Part-B eval.
+
+**Resuming (incl. a fresh Claude Code session): start with [`CLAUDE.md`](CLAUDE.md)** — it has the
+current state, the exact resume commands, the go/no-go gate, and the gotchas.
+
 ## Services
 | Service (compose) | Container | Port | Role |
 |---|---|---|---|
@@ -34,7 +43,7 @@ service code + config are bind-mounted); only frontend/image changes need `--bui
 docker-compose.yml      # one project: reaped-whirlwind
 .env.example            # canonical list of every env var (.env is gitignored)
 services/ screenshot/ processor/ weather/ dashboard/ inference/(Part C)
-ml/                     # CNN training/eval — runs on the Mac, not deployed
+ml/                     # CNN training/eval — runs on the analysis machine, not deployed
 data-tools/             # radar/event downloader + batch converter
 alerting/               # shared email-alert helper (Part C)
 docs/                   # ARCHITECTURE, DEPLOY, DATA, MODEL_CARD

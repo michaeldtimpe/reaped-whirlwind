@@ -12,6 +12,13 @@ venv/
 
 # OS / editor
 .DS_Store
+*.zip
+
+# Radar imagery / training data only ever lives under data/ (ignored above). The only
+# images intentionally tracked are services/processor/base_*_intensity_scale.png
+# (small color-scale references the processor needs to decode radar -> JSON).
+*.tif
+*.tiff
 
 # Data — bind-mounted from /volume1/docker/... on the NAS, NEVER committed.
 # (The compose file documents the host paths; the data itself stays out of git.)
