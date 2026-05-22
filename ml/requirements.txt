@@ -1,0 +1,4 @@
+# Training/eval deps. NOTE: torch needs Python 3.11-3.13 (no 3.14 wheels yet).
+torch
+numpy
+scikit-learn

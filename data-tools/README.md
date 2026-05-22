@@ -41,10 +41,15 @@ data/full/tensors/*.npy           # 2x128x128 float32 model inputs
 data/full/tensors_manifest.csv    # tensor path + label/subtype/event/date/station
 ```
 
-## After it finishes
-Copy `data/full/` back to the training machine (or train in place). Training/eval code
-(`ml/train.py`, `ml/evaluate.py`) uses `tensors_manifest.csv` with leakage-safe splits
-(by date+station) and operational metrics — added next, after this dataset exists.
+## After it finishes — train + evaluate
+Copy `data/full/` back to the training machine, or train in place (the M4 Pro is great for it):
+```bash
+./ml/run_training.sh data/full          # or: ./ml/run_training.sh data/full --epochs 50
+```
+This builds a torch venv (auto-picks Python 3.11-3.13 — torch has no 3.14 wheels), trains the
+compact CNN with a **leakage-safe split (by date+station)**, then runs `evaluate.py` = the
+**go/no-go**: PR-AUC + ROC-AUC vs baselines (refl intensity, velocity shear, majority),
+operational precision-at-recall, and per-negative-subtype false-positive rates.
 
 ## Notes
 - `tensors_manifest.csv` `subtype` lets evaluation break down performance vs each negative
