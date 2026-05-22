@@ -1,0 +1,19 @@
+# Screenshot Service Configuration
+
+output_dir: "/screenshots"
+interval_seconds: 600  # 10 minutes
+
+screenshot:
+  timeout: 30          # page-load timeout (seconds)
+  wait_time: 5         # extra wait for dynamic content
+  viewport_width: 1920
+  viewport_height: 1080
+
+urls:
+  - url: "https://radar.weather.gov/ridge/standard/KFWS_0.gif"
+    prefix: "radar_base_reflectivity"
+  - url: "https://radar.weather.gov/ridge/standard/KFWS_1.gif"
+    prefix: "radar_base_velocity"
+
+logging:
+  level: "INFO"

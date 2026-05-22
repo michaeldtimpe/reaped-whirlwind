@@ -1,0 +1,103 @@
+name: reaped-whirlwind
+
+# One compose project for the whole weather/radar pipeline.
+# Data lives at absolute host paths under /volume1/docker (bind-mounted, NOT in this repo).
+# Each service's main code + config is bind-mounted too, so backend tweaks apply with
+# `docker-compose restart <service>` instead of a rebuild (see docs/DEPLOY.md).
+
+services:
+  screenshot:
+    build: ./services/screenshot
+    image: reaped-whirlwind-screenshot
+    container_name: screenshot-service
+    restart: unless-stopped
+    init: true
+    pids_limit: 100
+    environment:
+      - TZ=${TZ:-America/Chicago}
+      - PUID=${PUID:-106808}
+      - PGID=${PGID:-106808}
+    volumes:
+      - ./services/screenshot/screenshot_service.py:/app/screenshot_service.py:ro
+      - ./services/screenshot/config.yaml:/app/config.yaml:ro
+      - /volume1/docker/weather-screenshots:/screenshots:rw
+      - /volume1/docker/service-status:/status:rw
+    mem_limit: 1g
+
+  processor:
+    build: ./services/processor
+    image: reaped-whirlwind-processor
+    container_name: radar-image-processor
+    restart: unless-stopped
+    environment:
+      - TZ=${TZ:-America/Chicago}
+      - PUID=${PUID:-106808}
+      - PGID=${PGID:-106808}
+      - PROCESSING_MODE=${PROCESSING_MODE:-normal}
+      - SAMPLE_RATE=${SAMPLE_RATE:-4}
+    ports:
+      - "9005:8080"
+    volumes:
+      - ./services/processor/processor_service.py:/app/processor_service.py:ro
+      - ./services/processor/web_server.py:/app/web_server.py:ro
+      - ./services/processor/radar_tools:/app/radar_tools:ro
+      - ./services/processor/config.yaml:/app/config.yaml:ro
+      - ./services/processor/base_reflectivity_intensity_scale.png:/app/base_reflectivity_intensity_scale.png:ro
+      - ./services/processor/base_velocity_intensity_scale.png:/app/base_velocity_intensity_scale.png:ro
+      - /volume1/docker/weather-screenshots:/input:rw
+      - /volume1/docker/processed-weather-screenshots:/output:rw
+      - /volume1/docker/radar-image-processor-logs:/logs:rw
+      - /volume1/docker/service-status:/status:rw
+    mem_limit: 2g
+    cpu_shares: 128
+    cpuset: "3"
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  weather:
+    build: ./services/weather
+    image: reaped-whirlwind-weather
+    container_name: weather-reporter
+    restart: unless-stopped
+    environment:
+      - TZ=${TZ:-America/Chicago}
+      - NWS_REGION=${NWS_REGION:-DFW}
+      - NWS_LAT=${NWS_LAT:-32.8968}
+      - NWS_LON=${NWS_LON:--97.0380}
+      - NWS_UA=${NWS_UA:-(reaped-whirlwind weather-reporter, weather@example.com)}
+      - WEATHER_INTERVAL=${WEATHER_INTERVAL:-600}
+    ports:
+      - "9006:9006"
+    volumes:
+      - ./services/weather/weather_report_generator.py:/app/weather_report_generator.py:ro
+      - /volume1/docker/weather-reports:/logs:rw
+      - /volume1/docker/service-status:/status:rw
+    mem_limit: 256m
+
+  dashboard:
+    build: ./services/dashboard
+    image: reaped-whirlwind-dashboard
+    container_name: pipeline-dashboard
+    restart: unless-stopped
+    environment:
+      - TZ=${TZ:-America/Chicago}
+      - PORT=9007
+      - DOCKER_API_VERSION=1.43
+      - COMPOSE_DIR=/project
+      - COMPOSE_PROJECT_NAME=reaped-whirlwind
+    ports:
+      - "9007:9007"
+    volumes:
+      - ./services/dashboard/dashboard_server.py:/app/dashboard_server.py:ro
+      - ./services/dashboard/static:/app/static:ro
+      - /var/run/docker.sock:/var/run/docker.sock:rw
+      - /volume1/docker/service-status:/status:ro
+      - /volume1/docker/weather-screenshots:/screenshots:ro
+      - /volume1/docker/processed-weather-screenshots:/processed:ro
+      # The repo itself, so the dashboard can run `docker-compose ... up -d --build <svc>`:
+      - /volume1/docker/reaped-whirlwind:/project:ro
+    mem_limit: 256m

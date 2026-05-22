@@ -1,0 +1,49 @@
+# Radar Image Processor Configuration
+
+# Directory paths (inside container)
+paths:
+  input_dir: "/input" # Raw radar images
+  output_dir: "/output" # Processed JSON files
+  logs_dir: "/logs" # Log files
+  reflectivity_scale: "/app/base_reflectivity_intensity_scale.png"
+  velocity_scale: "/app/base_velocity_intensity_scale.png"
+
+# Processing settings
+processing:
+  # Minimum age before processing (seconds)
+  # Images newer than this are skipped (still being written)
+  min_age_seconds: 600 # 10 minutes
+
+  # Sample rate for conversion (1-10)
+  # 1 = full resolution, 4 = recommended, higher = smaller files
+  sample_rate: 6
+
+  # Processing interval (how often to check for new images)
+  check_interval_seconds: 60
+
+  # Delete source image after successful processing
+  delete_after_processing: true
+
+  # Verify JSON output before deleting source
+  verify_output: true
+
+  # Minimum JSON file size (bytes) to be considered valid
+  min_json_size: 1000
+
+# Image file patterns to process
+patterns:
+  reflectivity: "radar_base_reflectivity_*.png"
+  velocity: "radar_base_velocity_*.png"
+
+# Web interface
+web:
+  host: "0.0.0.0"
+  port: 8080
+  # Update interval for web dashboard (seconds)
+  refresh_interval: 5
+
+# Logging
+logging:
+  level: "INFO" # DEBUG, INFO, WARNING, ERROR
+  max_log_files: 10
+  max_log_size_mb: 10

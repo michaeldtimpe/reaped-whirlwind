@@ -1,0 +1,36 @@
+# Secrets / runtime config
+.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+.ipynb_checkpoints/
+
+# OS / editor
+.DS_Store
+
+# Data — bind-mounted from /volume1/docker/... on the NAS, NEVER committed.
+# (The compose file documents the host paths; the data itself stays out of git.)
+weather-screenshots/
+processed-weather-screenshots/
+weather-reports/
+service-status/
+radar-image-processor-logs/
+postive-tornado-images-*/
+tornado_dataset/
+data/
+*.log
+logs/
+
+# ML artifacts (weights, exports, large run outputs)
+*.pt
+*.pth
+*.onnx
+*.npy
+*.npz
+models/
+ml/runs/**/artifacts/

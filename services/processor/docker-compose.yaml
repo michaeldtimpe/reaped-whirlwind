@@ -1,0 +1,62 @@
+version: "4.1"
+
+services:
+  radar-image-processor:
+    image: radar-image-processor:latest
+    build: .
+    container_name: radar-image-processor
+    restart: unless-stopped
+
+    environment:
+      - TZ=America/Chicago
+      - PUID=106808
+      - PGID=106808
+      # Processing mode: normal, test, debug
+      - PROCESSING_MODE=normal
+      # Sample rate for conversion (4 recommended)
+      - SAMPLE_RATE=4
+
+    ports:
+      # Web interface
+      - "9005:8080"
+
+    volumes:
+      # Config file (read-only)
+      - ./config.yaml:/app/config.yaml:ro
+
+      # Input: Raw radar images from screenshot service
+      - /volume1/docker/weather-screenshots:/input:rw
+
+      # Output: Processed JSON files
+      - /volume1/docker/processed-weather-screenshots:/output:rw
+
+      # Logs (optional, for debugging)
+      - /volume1/docker/radar-image-processor-logs:/logs:rw
+
+      # Scale images (read-only)
+      - ./base_reflectivity_intensity_scale.png:/app/base_reflectivity_intensity_scale.png:ro
+      - ./base_velocity_intensity_scale.png:/app/base_velocity_intensity_scale.png:ro
+
+      # added service-status mount
+      - /volume1/docker/service-status:/status:rw
+
+    # Memory limit
+    mem_limit: 2g
+
+    # CPU limits — keep this container from starving Plex
+    cpu_shares: 128       # low scheduling priority (default 1024)
+    cpuset: "3"           # pin to core 3 (least used by Plex)
+
+    # Health check
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python3",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s

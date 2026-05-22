@@ -1,0 +1,15 @@
+version: "3.8"
+
+services:
+  weather-reporter:
+    build: .
+    container_name: weather-reporter
+    restart: unless-stopped
+    environment:
+      - TZ=America/Chicago
+    ports:
+      - "9006:9006"
+    volumes:
+      - /volume1/docker/weather-reports:/logs:rw
+      - /volume1/docker/service-status:/status:rw
+    mem_limit: 256m

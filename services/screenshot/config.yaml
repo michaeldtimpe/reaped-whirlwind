@@ -1,0 +1,19 @@
+# Screenshot Service Configuration
+
+output_dir: "/screenshots"
+interval_seconds: 600  # 10 minutes
+
+screenshot:
+  timeout: 30          # page-load timeout (seconds)
+  wait_time: 5         # extra wait for dynamic content
+  viewport_width: 1920
+  viewport_height: 1080
+
+urls:
+  - url: "https://radar.weather.gov/?settings=v1_eyJhZ2VuZGEiOnsiaWQiOiJsb2NhbCIsImNlbnRlciI6Wy05Ny4wNzQsMzIuNzUxXSwibG9jYXRpb24iOm51bGwsInpvb20iOjEwLjUzMzY1MjQwMTg5OTE1OCwiZmlsdGVyIjpudWxsLCJsYXllciI6InNyX2JyZWYiLCJzdGF0aW9uIjoiS0ZXUyJ9LCJhbmltYXRpbmciOmZhbHNlLCJiYXNlIjoic3RhbmRhcmQiLCJhcnRjYyI6ZmFsc2UsImNvdW50eSI6ZmFsc2UsImN3YSI6ZmFsc2UsInJmYyI6ZmFsc2UsInN0YXRlIjpmYWxzZSwibWVudSI6dHJ1ZSwic2hvcnRGdXNlZE9ubHkiOnRydWUsIm9wYWNpdHkiOnsiYWxlcnRzIjoxLCJsb2NhbCI6MSwibG9jYWxTdGF0aW9ucyI6MCwibmF0aW9uYWwiOjAuNn19"
+    prefix: "radar_base_reflectivity"
+  - url: "https://radar.weather.gov/?settings=v1_eyJhZ2VuZGEiOnsiaWQiOiJsb2NhbCIsImNlbnRlciI6Wy05Ny4wNzcsMzIuNzY2XSwibG9jYXRpb24iOm51bGwsInpvb20iOjEwLjQ2NzYwOTU5MzUyNDA1NCwiZmlsdGVyIjpudWxsLCJsYXllciI6InNyX2J2ZWwiLCJzdGF0aW9uIjoiS0ZXUyJ9LCJhbmltYXRpbmciOmZhbHNlLCJiYXNlIjoic3RhbmRhcmQiLCJhcnRjYyI6ZmFsc2UsImNvdW50eSI6ZmFsc2UsImN3YSI6ZmFsc2UsInJmYyI6ZmFsc2UsInN0YXRlIjpmYWxzZSwibWVudSI6dHJ1ZSwic2hvcnRGdXNlZE9ubHkiOnRydWUsIm9wYWNpdHkiOnsiYWxlcnRzIjoxLCJsb2NhbCI6MSwibG9jYWxTdGF0aW9ucyI6MCwibmF0aW9uYWwiOjAuNn19"
+    prefix: "radar_base_velocity"
+
+logging:
+  level: "INFO"

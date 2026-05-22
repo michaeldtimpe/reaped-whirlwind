@@ -1,0 +1,436 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>DFW Weather Data Collector</title>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+/* ── Reset & Tokens ──────────────────────────────────────────── */
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#07080d;--panel:#0d1017;--panel-hi:#131720;--border:#1a1f2e;
+  --border-hi:#252d42;--text:#c9d1d9;--text-dim:#525c6c;--text-bright:#e6edf3;
+  --mono:'IBM Plex Mono',monospace;--sans:'Outfit',sans-serif;
+  --green:#2dd4a0;--green-bg:rgba(45,212,160,.08);--green-bdr:rgba(45,212,160,.25);
+  --amber:#e5a63e;--amber-bg:rgba(229,166,62,.08);--amber-bdr:rgba(229,166,62,.25);
+  --red:#e5534b;--red-bg:rgba(229,83,75,.08);--red-bdr:rgba(229,83,75,.25);
+  --blue:#58a6ff;--blue-bg:rgba(88,166,255,.08);--blue-bdr:rgba(88,166,255,.25);
+  --cyan:#56d4dd;--purple:#bc8cff;
+}
+html{font-size:14px}
+body{font-family:var(--sans);background:var(--bg);color:var(--text);
+  min-height:100vh;overflow-x:hidden}
+
+/* ── Scanline texture ────────────────────────────────────────── */
+body::after{
+  content:'';position:fixed;inset:0;pointer-events:none;z-index:9999;
+  background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,0,0,.04) 2px,rgba(0,0,0,.04) 4px);
+}
+
+/* ── Layout ──────────────────────────────────────────────────── */
+.shell{max-width:1360px;margin:0 auto;padding:24px 28px 48px}
+
+/* ── Top bar ─────────────────────────────────────────────────── */
+.topbar{display:flex;align-items:center;justify-content:space-between;
+  margin-bottom:28px;padding-bottom:20px;border-bottom:1px solid var(--border)}
+.topbar-left{display:flex;align-items:center;gap:16px}
+.sigil{width:40px;height:40px;border-radius:10px;border:2px solid var(--green);
+  display:flex;align-items:center;justify-content:center;
+  font-size:18px;color:var(--green);
+  box-shadow:0 0 20px rgba(45,212,160,.12),inset 0 0 12px rgba(45,212,160,.06);
+  animation:sigil-pulse 3s ease-in-out infinite}
+@keyframes sigil-pulse{0%,100%{box-shadow:0 0 20px rgba(45,212,160,.12),inset 0 0 12px rgba(45,212,160,.06)}
+  50%{box-shadow:0 0 28px rgba(45,212,160,.2),inset 0 0 16px rgba(45,212,160,.1)}}
+.topbar h1{font-size:1.35rem;font-weight:800;color:var(--text-bright);letter-spacing:-.3px}
+.topbar .sub{font-family:var(--mono);font-size:.7rem;color:var(--text-dim);margin-top:2px;letter-spacing:.5px;text-transform:uppercase}
+.topbar-right{text-align:right;font-family:var(--mono);font-size:.72rem;color:var(--text-dim)}
+.topbar-right .clock{font-size:.82rem;color:var(--cyan);margin-top:2px}
+
+/* ── Cards ───────────────────────────────────────────────────── */
+.card{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:18px 20px;
+  display:flex;flex-direction:column;gap:12px;transition:border-color .2s}
+.card:hover{border-color:var(--border-hi)}
+.card-hdr{font-family:var(--mono);font-size:.65rem;font-weight:600;text-transform:uppercase;
+  letter-spacing:1.4px;color:var(--text-dim);display:flex;align-items:center;gap:8px}
+.card-hdr .tag{font-family:var(--sans);font-size:.6rem;padding:2px 7px;border-radius:4px;font-weight:600;letter-spacing:.3px}
+.tag-ok{background:var(--green-bg);color:var(--green);border:1px solid var(--green-bdr)}
+.tag-warn{background:var(--amber-bg);color:var(--amber);border:1px solid var(--amber-bdr)}
+.tag-err{background:var(--red-bg);color:var(--red);border:1px solid var(--red-bdr)}
+.tag-off{background:rgba(82,92,108,.12);color:var(--text-dim);border:1px solid rgba(82,92,108,.25)}
+
+/* ── Service cards grid ──────────────────────────────────────── */
+.svc-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-bottom:20px}
+@media(max-width:900px){.svc-grid{grid-template-columns:1fr}}
+
+.svc-body{display:flex;flex-direction:column;gap:8px}
+.svc-row{display:flex;justify-content:space-between;align-items:center;
+  font-family:var(--mono);font-size:.78rem}
+.svc-row .label{color:var(--text-dim)}
+.svc-row .val{color:var(--text);font-weight:500}
+.svc-row .val.good{color:var(--green)}
+.svc-row .val.bad{color:var(--red)}
+
+/* Controls */
+.svc-controls{display:flex;gap:6px;margin-top:4px;padding-top:10px;border-top:1px solid var(--border)}
+.btn{font-family:var(--mono);font-size:.68rem;font-weight:600;letter-spacing:.5px;
+  text-transform:uppercase;padding:6px 12px;border-radius:6px;border:1px solid;
+  cursor:pointer;transition:all .15s;display:flex;align-items:center;gap:5px}
+.btn:disabled{opacity:.4;cursor:not-allowed}
+.btn-stop{background:var(--red-bg);color:var(--red);border-color:var(--red-bdr)}
+.btn-stop:hover:not(:disabled){background:rgba(229,83,75,.15)}
+.btn-start{background:var(--green-bg);color:var(--green);border-color:var(--green-bdr)}
+.btn-start:hover:not(:disabled){background:rgba(45,212,160,.15)}
+.btn-update{background:var(--blue-bg);color:var(--blue);border-color:var(--blue-bdr)}
+.btn-update:hover:not(:disabled){background:rgba(88,166,255,.15)}
+.btn .spin{display:inline-block;width:10px;height:10px;border:2px solid currentColor;
+  border-top-color:transparent;border-radius:50%;animation:spin .6s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* ── Main grid (lower) ───────────────────────────────────────── */
+.main-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+@media(max-width:900px){.main-grid{grid-template-columns:1fr}}
+.span-full{grid-column:1/-1}
+
+/* ── Image preview ───────────────────────────────────────────── */
+.img-box{background:#080a10;border:1px solid var(--border);border-radius:8px;
+  min-height:210px;display:flex;align-items:center;justify-content:center;
+  overflow:hidden;position:relative}
+.img-box img{width:100%;height:100%;object-fit:contain;max-height:280px}
+.img-box .ph{text-align:center;color:var(--text-dim);font-family:var(--mono);font-size:.72rem}
+.img-box .ph .ic{font-size:2rem;margin-bottom:8px;opacity:.5}
+.img-meta{display:flex;justify-content:space-between;font-family:var(--mono);font-size:.7rem;color:var(--text-dim)}
+
+/* ── Metrics row ─────────────────────────────────────────────── */
+.metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+@media(max-width:700px){.metrics{grid-template-columns:1fr 1fr}}
+.metric{background:var(--panel-hi);border:1px solid var(--border);border-radius:8px;padding:14px 16px}
+.metric .mv{font-size:1.8rem;font-weight:800;line-height:1}
+.metric .ml{font-family:var(--mono);font-size:.62rem;color:var(--text-dim);margin-top:4px;
+  text-transform:uppercase;letter-spacing:.8px}
+
+/* ── Weather report ──────────────────────────────────────────── */
+.report{background:#080a10;border:1px solid var(--border);border-radius:8px;
+  padding:16px;font-family:var(--mono);font-size:.74rem;line-height:1.6;
+  color:var(--text);white-space:pre-wrap;word-wrap:break-word;
+  max-height:460px;overflow-y:auto}
+.report::-webkit-scrollbar{width:6px}
+.report::-webkit-scrollbar-track{background:transparent}
+.report::-webkit-scrollbar-thumb{background:var(--border-hi);border-radius:3px}
+
+/* ── Logs panel ──────────────────────────────────────────────── */
+.logs{background:#080a10;border:1px solid var(--border);border-radius:8px;
+  padding:12px;font-family:var(--mono);font-size:.68rem;line-height:1.5;
+  color:var(--text-dim);max-height:240px;overflow-y:auto;white-space:pre-wrap}
+.logs::-webkit-scrollbar{width:6px}
+.logs::-webkit-scrollbar-track{background:transparent}
+.logs::-webkit-scrollbar-thumb{background:var(--border-hi);border-radius:3px}
+
+/* ── Toast ───────────────────────────────────────────────────── */
+.toast-area{position:fixed;bottom:20px;right:20px;z-index:10000;display:flex;flex-direction:column;gap:8px}
+.toast{font-family:var(--mono);font-size:.72rem;padding:10px 16px;border-radius:8px;
+  border:1px solid;animation:toast-in .3s ease;max-width:360px;word-break:break-word}
+.toast-ok{background:var(--green-bg);color:var(--green);border-color:var(--green-bdr)}
+.toast-err{background:var(--red-bg);color:var(--red);border-color:var(--red-bdr)}
+.toast-info{background:var(--blue-bg);color:var(--blue);border-color:var(--blue-bdr)}
+@keyframes toast-in{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:none}}
+
+/* ── Footer ──────────────────────────────────────────────────── */
+.foot{text-align:center;font-family:var(--mono);font-size:.62rem;color:var(--text-dim);
+  margin-top:32px;padding-top:16px;border-top:1px solid var(--border);
+  letter-spacing:.6px;text-transform:uppercase}
+</style>
+</head>
+<body>
+<div class="shell">
+
+  <!-- Top bar -->
+  <div class="topbar">
+    <div class="topbar-left">
+      <div class="sigil">&#9729;</div>
+      <div>
+        <h1>DFW Weather Data Collector</h1>
+        <div class="sub">Screenshot &rarr; Process &rarr; Report</div>
+      </div>
+    </div>
+    <div class="topbar-right">
+      <div>refresh 10 s</div>
+      <div class="clock" id="clock">&mdash;</div>
+    </div>
+  </div>
+
+  <!-- Service cards -->
+  <div class="svc-grid" id="svc-grid"></div>
+
+  <!-- Metrics row -->
+  <div class="metrics" id="metrics-row" style="margin-bottom:20px"></div>
+
+  <!-- Main panels -->
+  <div class="main-grid">
+    <div class="card">
+      <div class="card-hdr">Latest Screenshot</div>
+      <div class="img-box" id="ss-box"><div class="ph"><div class="ic">&#x1F4E1;</div><div>No screenshot yet</div></div></div>
+      <div class="img-meta"><span id="ss-name">&mdash;</span><span id="ss-ago">&mdash;</span></div>
+    </div>
+
+    <div class="card">
+      <div class="card-hdr">Latest Processed</div>
+      <div class="img-box" id="pr-box"><div class="ph"><div class="ic">&#x1F4CA;</div><div>No processed data yet</div></div></div>
+      <div class="img-meta"><span id="pr-name">&mdash;</span><span id="pr-ago">&mdash;</span></div>
+    </div>
+
+    <div class="card span-full">
+      <div class="card-hdr">Weather Report</div>
+      <pre class="report" id="wx">Waiting for first report&hellip;</pre>
+      <div class="img-meta"><span id="wx-time">&mdash;</span><span id="wx-region">&mdash;</span></div>
+    </div>
+  </div>
+
+</div>
+
+<div class="toast-area" id="toasts"></div>
+
+<div class="foot">DFW Weather Data Collector &middot; Synology NAS</div>
+
+<script>
+/* ═══════════════════════════════════════════════════════════════
+   Pipeline Control — front-end logic
+   ═══════════════════════════════════════════════════════════════ */
+
+const REFRESH = 10_000;
+let _busy = {};          // {serviceName: true} while a command runs
+
+// ── Helpers ─────────────────────────────────────────────────────
+
+function ago(v) {
+  if (!v) return '\u2014';
+  var t;
+  if (typeof v === 'number') t = v * 1000;          // unix timestamp
+  else t = new Date(v.replace(' UTC', 'Z')).getTime();
+  var m = Math.floor((Date.now() - t) / 60000);
+  if (m < 1) return 'just now';
+  if (m < 60) return m + 'm ago';
+  return Math.floor(m / 60) + 'h ' + (m % 60) + 'm ago';
+}
+
+function tag(state, statusData) {
+  if (state === 'running') {
+    // check inner status for finer granularity
+    var inner = statusData?.current_status || statusData?.status || 'running';
+    if (inner === 'error' || inner === 'Error') return ['ERROR', 'tag-err'];
+    if (inner === 'Processing') return ['PROCESSING', 'tag-warn'];
+    return ['RUNNING', 'tag-ok'];
+  }
+  if (state === 'exited') return ['STOPPED', 'tag-err'];
+  if (state === 'restarting') return ['RESTARTING', 'tag-warn'];
+  return ['OFFLINE', 'tag-off'];
+}
+
+function toast(msg, kind) {
+  var el = document.createElement('div');
+  el.className = 'toast toast-' + (kind || 'info');
+  el.textContent = msg;
+  document.getElementById('toasts').appendChild(el);
+  setTimeout(function() { el.remove(); }, 5000);
+}
+
+// ── Service command ─────────────────────────────────────────────
+
+async function svcCmd(name, action) {
+  if (_busy[name]) return;
+  _busy[name] = true;
+  renderSvcCards(window._lastData);  // show spinner
+
+  var labels = { stop: 'Stopping', start: 'Starting', update: 'Rebuilding' };
+  toast(labels[action] + ' ' + name + '…', 'info');
+
+  try {
+    var r = await fetch('/api/services/' + name + '/' + action, { method: 'POST' });
+    var d = await r.json();
+    if (d.ok) {
+      toast(name + ': ' + action + ' succeeded', 'ok');
+    } else {
+      toast(name + ': ' + action + ' failed — ' + (d.stderr || '').slice(0, 120), 'err');
+    }
+  } catch (e) {
+    toast('Network error: ' + e.message, 'err');
+  }
+  _busy[name] = false;
+  refresh();  // immediate re-poll
+}
+
+// ── Renderers ───────────────────────────────────────────────────
+
+function renderSvcCards(data) {
+  if (!data) return;
+  var svcs = data.services || {};
+  var html = '';
+  var order = ['screenshot-service', 'radar-processor', 'weather-reporter'];
+
+  order.forEach(function(key) {
+    var s = svcs[key];
+    if (!s) return;
+    var sd = s.status_data || {};
+    var ds = s.docker_state || 'unknown';
+    var tg = tag(ds, sd);
+    var busy = !!_busy[key];
+    var isRunning = ds === 'running';
+
+    // Extract useful fields per service
+    var rows = '';
+    if (key === 'screenshot-service') {
+      rows += R('Captured', sd.total_captured ?? '\u2014', 'good');
+      rows += R('Errors', sd.total_errors ?? 0, (sd.total_errors || 0) > 0 ? 'bad' : '');
+      rows += R('Last file', shortName(sd.last_capture_file));
+      rows += R('Last time', ago(sd.last_capture_time));
+    } else if (key === 'radar-processor') {
+      rows += R('Processed', sd.total_processed ?? '\u2014', 'good');
+      rows += R('Errors', sd.total_errors ?? 0, (sd.total_errors || 0) > 0 ? 'bad' : '');
+      rows += R('Workers', sd.active_workers ?? 0);
+      rows += R('Last time', ago(sd.last_processed_time));
+    } else {
+      rows += R('Status', sd.status || '\u2014');
+      rows += R('Region', sd.region || '\u2014');
+      rows += R('Last report', ago(sd.last_report_time));
+    }
+
+    html += '<div class="card"><div class="card-hdr">' + s.label +
+      ' <span class="tag ' + tg[1] + '">' + tg[0] + '</span></div>' +
+      '<div class="svc-body">' + rows + '</div>' +
+      '<div class="svc-controls">' +
+        btn(key, 'stop', 'btn-stop', busy || !isRunning, busy && !isRunning ? false : busy) +
+        btn(key, 'start', 'btn-start', busy || isRunning, false) +
+        btn(key, 'update', 'btn-update', busy, busy) +
+      '</div></div>';
+  });
+
+  document.getElementById('svc-grid').innerHTML = html;
+}
+
+function R(label, val, cls) {
+  return '<div class="svc-row"><span class="label">' + label +
+    '</span><span class="val ' + (cls || '') + '">' + (val ?? '\u2014') + '</span></div>';
+}
+
+function btn(name, action, cls, disabled, spinning) {
+  var icons = { stop: '\u25A0', start: '\u25B6', update: '\u21BB' };
+  var inner = spinning ? '<span class="spin"></span>' : icons[action];
+  return '<button class="btn ' + cls + '"' + (disabled ? ' disabled' : '') +
+    ' onclick="svcCmd(\'' + name + '\',\'' + action + '\')">' +
+    inner + ' ' + action + '</button>';
+}
+
+function shortName(f) {
+  if (!f) return '\u2014';
+  if (f.length <= 30) return f;
+  return f.slice(0, 14) + '\u2026' + f.slice(-14);
+}
+
+function renderMetrics(data) {
+  var ss = data.services?.['screenshot-service']?.status_data || {};
+  var pr = data.services?.['radar-processor']?.status_data || {};
+  var f = data.folders || {};
+
+  var ssCount = ss.total_captured ?? '\u2014';
+  // If no PNGs on disk, use the synthetic count from processor data
+  if (ssCount === 0 || ssCount === '\u2014') {
+    var procData = data.services?.['radar-processor']?.status_data;
+    if (procData && procData.total_processed > 0) {
+      ssCount = procData.total_processed;
+    }
+  }
+
+  var items = [
+    [ssCount, 'Screenshots', '--cyan'],
+    [pr.total_processed ?? '\u2014', 'Processed', '--green'],
+    [(ss.total_errors || 0) + (pr.total_errors || 0), 'Errors',
+      ((ss.total_errors || 0) + (pr.total_errors || 0)) > 5 ? '--red' : '--amber'],
+    [(f.processed?.size_mb ?? 0) + ' MB', 'Output size', '--purple'],
+  ];
+
+  document.getElementById('metrics-row').innerHTML = items.map(function(i) {
+    return '<div class="metric"><div class="mv" style="color:var(' + i[2] + ')">' +
+      i[0] + '</div><div class="ml">' + i[1] + '</div></div>';
+  }).join('');
+}
+
+function renderPreviews(data) {
+  // Screenshot preview — show image if available, otherwise show inferred info
+  var ssEl = document.getElementById('ss-box');
+  var ssI = data.latest_screenshot;
+  var ssSvc = data.services?.['screenshot-service']?.status_data;
+  if (ssI) {
+    var img = ssEl.querySelector('img');
+    var src = '/api/screenshots/latest?t=' + Date.now();
+    if (!img) {
+      ssEl.innerHTML = '<img alt="Radar screenshot">';
+      img = ssEl.querySelector('img');
+      img.onerror = function() { ssEl.innerHTML = '<div class="ph"><div class="ic">&#x26A0;</div><div>Load failed</div></div>'; };
+    }
+    img.src = src;
+    document.getElementById('ss-name').textContent = ssI.filename;
+    document.getElementById('ss-ago').textContent = ago(ssI.modified);
+  } else if (ssSvc && ssSvc.last_capture_file) {
+    // No PNG on disk (processor deleted it) but we know screenshots are being produced
+    ssEl.innerHTML = '<div class="ph" style="width:100%;padding:16px;text-align:left">' +
+      '<div style="color:var(--cyan);font-size:1.1rem;margin-bottom:10px">&#x1F4F7; Capturing</div>' +
+      '<div style="line-height:1.8;font-family:var(--mono);font-size:.72rem">' +
+      '<div>PNGs are deleted after processing.</div>' +
+      '<div style="margin-top:6px"><span style="color:var(--text-dim)">Last captured: </span>' +
+      (ssSvc.last_capture_file || '\u2014') + '</div>' +
+      '<div><span style="color:var(--text-dim)">Total: </span>' +
+      (ssSvc.total_captured || 0) + ' screenshots</div>' +
+      '</div></div>';
+    document.getElementById('ss-name').textContent = ssSvc.last_capture_file || '\u2014';
+    document.getElementById('ss-ago').textContent = ago(ssSvc.last_capture_time);
+  }
+
+  // Processed — show metadata card (no image to render from JSON)
+  var prI = data.latest_processed;
+  var prEl = document.getElementById('pr-box');
+  if (prI) {
+    var kb = Math.round((prI.size_bytes || 0) / 1024);
+    prEl.innerHTML = '<div class="ph" style="width:100%;padding:16px;text-align:left">' +
+      '<div style="color:var(--green);font-size:1.1rem;margin-bottom:10px">&#x2705; JSON Ready</div>' +
+      '<div style="line-height:1.8">' +
+      '<div><span style="color:var(--text-dim)">File: </span>' + prI.filename + '</div>' +
+      '<div><span style="color:var(--text-dim)">Size: </span>' + kb + ' KB</div>' +
+      '</div></div>';
+    document.getElementById('pr-name').textContent = prI.filename;
+    document.getElementById('pr-ago').textContent = ago(prI.modified);
+  }
+
+  // Weather report
+  var wx = data.services?.['weather-reporter']?.status_data;
+  if (wx && wx.report_text) {
+    document.getElementById('wx').textContent = wx.report_text;
+    document.getElementById('wx-time').textContent = 'Updated: ' + ago(wx.last_report_time);
+    document.getElementById('wx-region').textContent = wx.region || '';
+  }
+}
+
+// ── Poll loop ───────────────────────────────────────────────────
+
+async function refresh() {
+  document.getElementById('clock').textContent =
+    new Date().toLocaleString('en-US', { timeZone: 'America/Chicago',
+      hour12: true, hour: 'numeric', minute: '2-digit', second: '2-digit',
+      month: 'short', day: 'numeric' });
+
+  try {
+    var r = await fetch('/api/status', { cache: 'no-store' });
+    var d = await r.json();
+    window._lastData = d;
+    renderSvcCards(d);
+    renderMetrics(d);
+    renderPreviews(d);
+  } catch (e) {
+    console.error('Poll failed', e);
+  }
+}
+
+refresh();
+setInterval(refresh, REFRESH);
+</script>
+</body>
+</html>

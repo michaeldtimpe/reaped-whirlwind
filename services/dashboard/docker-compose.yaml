@@ -1,0 +1,38 @@
+version: "3.8"
+
+services:
+  dashboard:
+    build: .
+    container_name: pipeline-dashboard
+    restart: unless-stopped
+    environment:
+      - TZ=America/Chicago
+      - PORT=9007
+      - DOCKER_API_VERSION=1.43
+      # Paths to each service's docker-compose project dir (as seen INSIDE this container)
+      - SS_COMPOSE_DIR=/projects/screenshot-service
+      - RP_COMPOSE_DIR=/projects/radar-processor
+      - WR_COMPOSE_DIR=/projects/weather-reporter
+    ports:
+      - "9007:9007"
+    volumes:
+      # Docker socket — required for start/stop/rebuild commands
+      - /var/run/docker.sock:/var/run/docker.sock:rw
+
+      # Shared status volume (all services write here)
+      - /volume1/docker/service-status:/status:ro
+
+      # Raw screenshots (for image preview)
+      - /volume1/docker/weather-screenshots:/screenshots:ro
+
+      # Processed JSON files (for metadata preview)
+      - /volume1/docker/processed-weather-screenshots:/processed:ro
+
+      # Mount each service's compose project directory so we can run
+      # `docker compose up -d --build` inside them.
+      # Adjust these paths to where each service lives on YOUR NAS.
+      - /volume1/docker/screenshot-service:/projects/screenshot-service:ro
+      - /volume1/docker/radar-image-processor:/projects/radar-processor:ro
+      - /volume1/docker/weather-reporter:/projects/weather-reporter:ro
+
+    mem_limit: 256m

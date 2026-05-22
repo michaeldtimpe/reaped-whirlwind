@@ -1,0 +1,42 @@
+version: "4.1"
+
+services:
+  radar-batch-processor:
+    image: radar-image-processor:latest
+    container_name: radar-batch-processor
+    restart: "no"
+
+    command: ["python3", "/app/batch_processor.py"]
+
+    environment:
+      - TZ=America/Chicago
+      - PUID=106808
+      - PGID=106808
+      - SAMPLE_RATE=4
+      - INPUT_DIR=/input
+      - WORKERS=3
+
+    ports:
+      - "9020:8080"
+
+    volumes:
+      # Batch processor script
+      - ./batch_processor.py:/app/batch_processor.py:ro
+
+      # Tornado dataset (input AND output — JSON stays alongside PNGs)
+      - /volume1/docker/weather-screenshots/postive-tornado-images-11-mar-2026/tornado_dataset/tornado:/input:rw
+
+      # Scale images (read-only)
+      - ./base_reflectivity_intensity_scale.png:/app/base_reflectivity_intensity_scale.png:ro
+      - ./base_velocity_intensity_scale.png:/app/base_velocity_intensity_scale.png:ro
+
+    mem_limit: 4g
+    cpu_shares: 512
+    cpuset: "0,1,2"
+
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s

@@ -1,0 +1,14 @@
+version: "3.8"
+
+services:
+  screenshot-service:
+    build: .
+    container_name: screenshot-service
+    restart: unless-stopped
+    environment:
+      - TZ=America/Chicago
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+      - /volume1/docker/weather-screenshots:/screenshots:rw
+      - /volume1/docker/service-status:/status:rw
+    mem_limit: 1g
