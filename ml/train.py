@@ -59,6 +59,8 @@ def main():
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--out", default="runs")
     ap.add_argument("--resume", default=None, help="path to an existing run dir with last.pt")
+    ap.add_argument("--patience", type=int, default=0,
+                    help="early-stop if val PR-AUC fails to improve for this many epochs (0 = off)")
     a = ap.parse_args()
     torch.manual_seed(a.seed)
     dev = pick_device(); print(f"device: {dev}")
@@ -80,6 +82,7 @@ def main():
     # --- resume vs fresh ---
     start_ep = 0
     best = -1.0
+    epochs_since_best = 0
     if a.resume:
         run = Path(a.resume)
         ckpt_path = run / "last.pt"
@@ -92,11 +95,13 @@ def main():
         opt.load_state_dict(ckpt["opt"])
         start_ep = ckpt["epoch"]
         best = ckpt.get("best", -1.0)
+        epochs_since_best = ckpt.get("epochs_since_best", 0)
         rng = ckpt.get("rng") or {}
         if "torch" in rng:  torch.set_rng_state(rng["torch"].cpu() if hasattr(rng["torch"], "cpu") else rng["torch"])
         if "numpy" in rng:  np.random.set_state(rng["numpy"])
         if "python" in rng: random.setstate(rng["python"])
-        print(f"resumed from {run}: starting at epoch {start_ep+1}/{a.epochs}, best={best:.3f}")
+        print(f"resumed from {run}: starting at epoch {start_ep+1}/{a.epochs}, "
+              f"best={best:.3f}, since_best={epochs_since_best}")
     else:
         run = Path(a.out) / time.strftime("%Y%m%d_%H%M%S"); run.mkdir(parents=True, exist_ok=True)
         # Write LATEST immediately so a crash at epoch 1 still leaves the run discoverable.
@@ -111,15 +116,22 @@ def main():
         ys, ps = predict(model, va, dev)
         prauc = average_precision_score(ys, ps) if len(set(ys)) > 1 else float("nan")
         train_loss = tot / max(1, len(splits["train"]))
-        print(f"  ep {ep+1:2d}  train_loss {train_loss:.4f}  val PR-AUC {prauc:.3f}")
-        if prauc == prauc and prauc > best:
+        improved = (prauc == prauc and prauc > best)
+        if improved:
             best = prauc; torch.save(model.state_dict(), run / "model.pt")
+            epochs_since_best = 0
+        else:
+            epochs_since_best += 1
+        stop = bool(a.patience and epochs_since_best >= a.patience)
+        marker = "*" if improved else (f"  early-stop (no improve x{epochs_since_best})" if stop else "")
+        print(f"  ep {ep+1:2d}  train_loss {train_loss:.4f}  val PR-AUC {prauc:.3f}{marker}")
         # --- per-epoch durable state ---
         torch.save({
             "model": model.state_dict(),
             "opt":   opt.state_dict(),
             "epoch": ep + 1,
             "best":  best,
+            "epochs_since_best": epochs_since_best,
             "rng": {
                 "torch":  torch.get_rng_state(),
                 "numpy":  np.random.get_state(),
@@ -132,13 +144,18 @@ def main():
             "train_pos": npos, "train_neg": nneg,
             "dataset_fingerprint": dataset_fingerprint(rows),
             "epochs_done": ep + 1,
+            "epochs_since_best": epochs_since_best,
+            "early_stopped": stop,
             "last_train_loss": train_loss,
             "last_val_prauc": (None if prauc != prauc else float(prauc)),
         })
         # Keep LATEST current (no-op on the same run, but harmless and idempotent).
         (Path(a.out) / "LATEST").write_text(str(run))
+        if stop:
+            break
 
-    print(f"saved -> {run}/  (best val PR-AUC {best:.3f})")
+    print(f"saved -> {run}/  (best val PR-AUC {best:.3f}, "
+          f"epochs done {ep+1}, early-stopped={bool(a.patience and epochs_since_best >= a.patience)})")
 
 
 if __name__ == "__main__":
