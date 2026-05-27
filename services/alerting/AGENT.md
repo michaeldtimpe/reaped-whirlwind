@@ -46,8 +46,21 @@ is sent.
 - Explicit `timeout=10` on `smtplib.SMTP(...)` — smtplib otherwise
   defaults to blocking forever, which would freeze the poll loop.
 - STARTTLS + login is the default flow (Gmail App Password, etc).
-  Variables: `SMTP_HOST` `SMTP_PORT` `SMTP_USER` `SMTP_PASS`
-  `ALERT_FROM` `ALERT_TO`.
+  Variables: `SMTP_HOST` `SMTP_PORT` `SMTP_USER` `SMTP_PASS` `ALERT_FROM`.
+- Two recipient lists (both comma-separated):
+  - `ALERT_TO` — gets the **full** email body.
+  - `ALERT_TO_SMS` — gets the **short** body (subject + ~140-char body)
+    via `compose_sms()` for email→SMS carrier gateways like
+    `<number>@msg.fi.google.com` (Google Fi),
+    `<number>@txt.att.net` (AT&T), `<number>@vtext.com` (Verizon),
+    `<number>@tmomail.net` (T-Mobile).
+- Both lists are sent over **one SMTP connection** per cycle for
+  efficiency (`smtp_send_many`).
+- **Partial-failure rule:** if at least one recipient succeeds, the
+  alert is recorded in the ledger (recipients_ok / recipients_failed
+  fields). Other recipients are NOT retried — retrying would
+  duplicate-send to the recipients who already got it. Total-failure
+  (every send fails) → NOT recorded; next cycle retries all.
 
 **CLI.**
 - `python alert_service.py` — service loop + Flask /health.

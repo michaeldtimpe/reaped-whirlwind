@@ -171,6 +171,7 @@ services:
       - SMTP_PASS=${SMTP_PASS}
       - ALERT_FROM=${ALERT_FROM}
       - ALERT_TO=${ALERT_TO}
+      - ALERT_TO_SMS=${ALERT_TO_SMS:-}
       - INFERENCE_STATUS_PATH=/status/inference_status.json
       - ALERTS_SENT_PATH=/status/alerts_sent.json
       - STATUS_PATH=/status/alerting_status.json

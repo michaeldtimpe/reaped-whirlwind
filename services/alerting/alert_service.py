@@ -45,7 +45,14 @@ SMTP_PORT  = int(os.environ.get("SMTP_PORT", "587"))
 SMTP_USER  = os.environ.get("SMTP_USER", "")
 SMTP_PASS  = os.environ.get("SMTP_PASS", "")
 ALERT_FROM = os.environ.get("ALERT_FROM", "")
-ALERT_TO   = os.environ.get("ALERT_TO", "")
+
+# Comma-separated. ALERT_TO gets the full email body; ALERT_TO_SMS gets a
+# ~140-char truncated subject+body suitable for an email→SMS carrier gateway.
+def _split_csv(s):
+    return [x.strip() for x in (s or "").split(",") if x.strip()]
+
+ALERT_TO_FULL = _split_csv(os.environ.get("ALERT_TO", ""))
+ALERT_TO_SMS  = _split_csv(os.environ.get("ALERT_TO_SMS", ""))
 
 NWS_ALERTS_URL      = f"https://api.weather.gov/alerts/active?point={KFWS_LAT},{KFWS_LON}"
 PER_CYCLE_EMAIL_CAP = 5
@@ -201,21 +208,46 @@ def compose_email(props, model_state, score, threshold, score_age, scan_delta):
     return subject, body
 
 
+def compose_sms(props, model_state, score, threshold):
+    """SMS-friendly variant for email→SMS carrier gateways (160-char body cap).
+    Subject ~50ch; body ~140ch. Carriers vary in how they render subject+body —
+    we keep BOTH short so either rendering reads cleanly."""
+    area    = props.get("areaDesc") or "—"
+    expires = (props.get("expires") or "")[:16]   # YYYY-MM-DDTHH:MM is enough
+    score_str = f"{score:.2f}" if score is not None else "—"
+    state_short = {"elevated": "ELEVATED", "not elevated": "NOT ELEV", "unavailable": "N/A"}[model_state]
+    subject = f"TO.W {area[:35]} (model:{state_short})"
+    body = (f"Tornado Warning until {expires}. Model {state_short} "
+            f"({score_str} vs {threshold:.2f}). Heed NWS. Full details emailed.")
+    return subject, body
+
+
 # ---- SMTP --------------------------------------------------------------------
-def smtp_send(subject, body):
-    """Returns None on success, error string on failure. Hard 10s timeout."""
-    msg = MIMEText(body)
-    msg["Subject"] = subject
-    msg["From"] = ALERT_FROM
-    msg["To"] = ALERT_TO
+def smtp_send_many(messages):
+    """Send a list of (recipient, subject, body) over one SMTP connection.
+    Returns list of (recipient, None|error_str). On connection-level failure,
+    every recipient is marked failed with the same error."""
+    if not messages:
+        return []
     try:
         with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=10) as s:
             s.starttls(context=ssl.create_default_context())
             s.login(SMTP_USER, SMTP_PASS)
-            s.send_message(msg)
-        return None
+            results = []
+            for recipient, subject, body in messages:
+                msg = MIMEText(body)
+                msg["Subject"] = subject
+                msg["From"] = ALERT_FROM
+                msg["To"] = recipient
+                try:
+                    s.send_message(msg)
+                    results.append((recipient, None))
+                except Exception as e:
+                    results.append((recipient, f"{type(e).__name__}: {e}"))
+            return results
     except Exception as e:
-        return f"{type(e).__name__}: {e}"
+        err = f"{type(e).__name__}: {e}"
+        return [(r, err) for r, _, _ in messages]
 
 
 # ---- dedupe ledger -----------------------------------------------------------
@@ -307,18 +339,35 @@ def run_cycle(state: State) -> dict:
             # Deferred — NOT written to ledger; still eligible next cycle.
             state.record_error("cap", f"deferred alert_id={alert_id} (cap={PER_CYCLE_EMAIL_CAP})")
             continue
-        subject, body = compose_email(props, model_state, score, thr, score_age, scan_delta)
-        err = smtp_send(subject, body)
-        if err is not None:
-            state.record_error("smtp", f"alert_id={alert_id}: {err}")
+
+        full_subj, full_body  = compose_email(props, model_state, score, thr, score_age, scan_delta)
+        sms_subj,  sms_body   = compose_sms(props, model_state, score, thr)
+        messages = ([(r, full_subj, full_body) for r in ALERT_TO_FULL]
+                    + [(r, sms_subj, sms_body) for r in ALERT_TO_SMS])
+        if not messages:
+            state.record_error("config", "no ALERT_TO / ALERT_TO_SMS recipients configured")
             new_status = "smtp_error"
-            continue   # do NOT append to ledger; retry next cycle
+            continue
+        results = smtp_send_many(messages)
+        any_ok = any(err is None for _, err in results)
+        failed = [(r, e) for r, e in results if e is not None]
+        if not any_ok:
+            # Total failure — do NOT append to ledger; retry next cycle.
+            state.record_error("smtp", f"alert_id={alert_id}: all sends failed: {failed}")
+            new_status = "smtp_error"
+            continue
+        # At least one recipient got it. Record so we don't double-send next cycle.
+        if failed:
+            state.record_error("smtp", f"alert_id={alert_id}: partial failure: {failed}")
+            new_status = "smtp_error"   # surface to dashboard, but don't retry
         ledger.append({
             "alert_id": alert_id,
             "sent_at": utc_iso(now),
             "model_state": model_state,
             "score": score,
             "threshold": thr,
+            "recipients_ok":     [r for r, e in results if e is None],
+            "recipients_failed": [{"to": r, "err": e} for r, e in failed],
         })
         sent_this_cycle += 1
         last_id, last_time, last_state = alert_id, utc_iso(now), model_state
@@ -370,20 +419,36 @@ def test_email_main(dry_run: bool):
     now = datetime.now(timezone.utc)
     model_state, score, thr, score_age = classify_model_state(infer, now)
     scan_delta = (infer or {}).get("scan_delta_seconds")
-    subject, body = compose_email(props, model_state, score, thr, score_age, scan_delta)
+
+    full_subj, full_body = compose_email(props, model_state, score, thr, score_age, scan_delta)
+    sms_subj,  sms_body  = compose_sms(props, model_state, score, thr)
+
     if dry_run:
-        print(f"SUBJECT: {subject}\n")
-        print(body)
+        print("=" * 64)
+        print("FULL  (one per ALERT_TO recipient):")
+        print(f"  TO: {ALERT_TO_FULL}")
+        print(f"  SUBJECT: {full_subj}\n")
+        print(full_body)
+        print("=" * 64)
+        print(f"SMS   (one per ALERT_TO_SMS recipient; body len={len(sms_body)} chars):")
+        print(f"  TO: {ALERT_TO_SMS}")
+        print(f"  SUBJECT: {sms_subj}")
+        print(f"  BODY:    {sms_body}")
         sys.exit(0)
-    if not (SMTP_HOST and SMTP_USER and ALERT_FROM and ALERT_TO):
-        sys.stderr.write("FATAL: SMTP_* / ALERT_FROM / ALERT_TO env vars not set\n")
+
+    if not (SMTP_HOST and SMTP_USER and ALERT_FROM):
+        sys.stderr.write("FATAL: SMTP_HOST / SMTP_USER / ALERT_FROM env vars not set\n")
         sys.exit(1)
-    err = smtp_send(subject, body)
-    if err:
-        sys.stderr.write(f"SMTP error: {err}\n")
+    if not (ALERT_TO_FULL or ALERT_TO_SMS):
+        sys.stderr.write("FATAL: neither ALERT_TO nor ALERT_TO_SMS is set\n")
         sys.exit(1)
-    print(f"sent: {subject}")
-    sys.exit(0)
+    messages = ([(r, full_subj, full_body) for r in ALERT_TO_FULL]
+                + [(r, sms_subj, sms_body) for r in ALERT_TO_SMS])
+    results = smtp_send_many(messages)
+    failed = [(r, e) for r, e in results if e is not None]
+    for r, e in results:
+        print(f"  {'OK' if e is None else 'FAIL'}  {r}{'' if e is None else ': ' + e}")
+    sys.exit(0 if not failed else 1)
 
 
 # ---- entrypoint --------------------------------------------------------------

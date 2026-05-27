@@ -50,8 +50,10 @@ Atomically written to `/status/alerting_status.json`.
 | `NWS_UA` | placeholder | required by NWS API |
 | `SMTP_HOST` | smtp.gmail.com | |
 | `SMTP_PORT` | 587 | |
-| `SMTP_USER`, `SMTP_PASS` | unset | required for sending |
-| `ALERT_FROM`, `ALERT_TO` | unset | required for sending |
+| `SMTP_USER`, `SMTP_PASS` | unset | required for sending (Gmail: App Password) |
+| `ALERT_FROM` | unset | From: address |
+| `ALERT_TO` | unset | comma-separated full-body recipients |
+| `ALERT_TO_SMS` | unset | comma-separated SMS-gateway recipients (short body) |
 | `MODEL_RISK_THRESHOLD` | from `.env` | annotation threshold |
 | `INFERENCE_STATUS_PATH` | `/status/inference_status.json` | input from inference service |
 | `ALERTS_SENT_PATH` | `/status/alerts_sent.json` | dedup ledger |
