@@ -101,3 +101,89 @@ services:
       # The repo itself, so the dashboard can run `docker-compose ... up -d --build <svc>`:
       - /volume1/docker/reaped-whirlwind:/project:ro
     mem_limit: 256m
+
+  # ---- Part C: live tornado-risk inference (experimental) ------------------
+  # Scores the most recent KFWS N0B+N0S from IEM RIDGE every 5 min.
+  # Writes service-status/inference_status.json. Does NOT alert — the alerting
+  # service consumes the score as an annotation when an NWS warning is active.
+  inference:
+    build: ./services/inference
+    image: reaped-whirlwind-inference
+    container_name: inference-service
+    restart: unless-stopped
+    environment:
+      - TZ=${TZ:-America/Chicago}
+      - PUID=${PUID:-106808}
+      - PGID=${PGID:-106808}
+      - PORT=9008
+      - POLL_INTERVAL=${INFERENCE_POLL_INTERVAL:-300}
+      - MAX_PAIR_DELTA_SECONDS=${MAX_PAIR_DELTA_SECONDS:-300}
+      - MAX_SCORE_AGE_SECONDS=${MAX_SCORE_AGE_SECONDS:-1800}
+      - KFWS_LAT=${KFWS_LAT:-32.5728}
+      - KFWS_LON=${KFWS_LON:--97.3031}
+      - MODEL_RISK_THRESHOLD=${MODEL_RISK_THRESHOLD:-0.8}
+      - MODEL_PATH=/model/model.pt
+      - MANIFEST_PATH=/model/manifest.json
+      - MODEL_FINGERPRINT=${MODEL_FINGERPRINT:-}
+      - STATUS_PATH=/status/inference_status.json
+      - STATE_DIR=/state
+    ports:
+      - "9008:9008"
+    volumes:
+      - ./services/inference:/app:ro
+      - ./data-tools:/data-tools:ro     # iem.py
+      - ./ml:/ml:ro                     # preprocess.py, model.py
+      - ./models/v1:/model:ro           # model.pt + manifest.json
+      - /volume1/docker/service-status:/status:rw
+      - /volume1/docker/inference-state:/state:rw
+      - /volume1/docker/inference-logs:/logs:rw
+    mem_limit: 1g
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9008/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # ---- Part C: NWS-gated alerting (experimental annotation only) -----------
+  # Every 5 min: fetch active NWS alerts for KFWS, filter to Tornado Warnings,
+  # email each unseen one with the model score appended as an annotation.
+  # No NWS warning ⇒ no email. Model never originates an alert.
+  alerting:
+    build: ./services/alerting
+    image: reaped-whirlwind-alerting
+    container_name: alerting-service
+    restart: unless-stopped
+    environment:
+      - TZ=${TZ:-America/Chicago}
+      - PUID=${PUID:-106808}
+      - PGID=${PGID:-106808}
+      - PORT=9009
+      - POLL_INTERVAL=${ALERTING_POLL_INTERVAL:-300}
+      - MAX_SCORE_AGE_SECONDS=${MAX_SCORE_AGE_SECONDS:-1800}
+      - KFWS_LAT=${KFWS_LAT:-32.5728}
+      - KFWS_LON=${KFWS_LON:--97.3031}
+      - NWS_UA=${NWS_UA:-(reaped-whirlwind alerting, alert@example.com)}
+      - MODEL_RISK_THRESHOLD=${MODEL_RISK_THRESHOLD:-0.8}
+      - SMTP_HOST=${SMTP_HOST}
+      - SMTP_PORT=${SMTP_PORT:-587}
+      - SMTP_USER=${SMTP_USER}
+      - SMTP_PASS=${SMTP_PASS}
+      - ALERT_FROM=${ALERT_FROM}
+      - ALERT_TO=${ALERT_TO}
+      - INFERENCE_STATUS_PATH=/status/inference_status.json
+      - ALERTS_SENT_PATH=/status/alerts_sent.json
+      - STATUS_PATH=/status/alerting_status.json
+    ports:
+      - "9009:9009"
+    volumes:
+      - ./services/alerting:/app:ro
+      - /volume1/docker/service-status:/status:rw
+      - /volume1/docker/alerting-logs:/logs:rw
+    mem_limit: 256m
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9009/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s

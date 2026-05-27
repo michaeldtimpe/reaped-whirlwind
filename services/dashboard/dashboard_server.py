@@ -47,6 +47,18 @@ SERVICES = {
         "status_file": "weather_status.json",
         "containers": ["weather-reporter", "weather-report-generator"],
     },
+    "inference-service": {
+        "label": "Inference (experimental)",
+        "service": "inference",
+        "status_file": "inference_status.json",
+        "containers": ["inference-service"],
+    },
+    "alerting-service": {
+        "label": "Alerting (NWS-gated)",
+        "service": "alerting",
+        "status_file": "alerting_status.json",
+        "containers": ["alerting-service"],
+    },
 }
 
 _cmd_lock = Lock()
