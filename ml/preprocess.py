@@ -23,6 +23,11 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
+# Bump this when decode_crop semantics change (palette mapping, crop size, mask rules,
+# output shape, normalisation, etc). The inference service refuses to start if its
+# loaded model's manifest preprocess_version != this — catches stale-model deploys.
+PREPROCESS_VERSION = "1.0"
+
 OUT = 128
 BOX_KM = 120.0
 REFL = dict(missing={0}, denom=255.0)
