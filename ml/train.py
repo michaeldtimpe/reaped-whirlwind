@@ -85,7 +85,9 @@ def main():
         ckpt_path = run / "last.pt"
         if not ckpt_path.exists():
             raise SystemExit(f"--resume {run}: no last.pt found")
-        ckpt = torch.load(ckpt_path, map_location=dev)
+        # weights_only=False: checkpoint contains numpy/python RNG state objects, not just tensors.
+        # Safe because the checkpoint is produced by this same script locally.
+        ckpt = torch.load(ckpt_path, map_location=dev, weights_only=False)
         model.load_state_dict(ckpt["model"])
         opt.load_state_dict(ckpt["opt"])
         start_ep = ckpt["epoch"]
