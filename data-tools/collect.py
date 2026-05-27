@@ -14,7 +14,7 @@ nearest-available frames. 150 km range cutoff.
 
 Full run (M4 Pro): see run_collection.sh.  Quick check: --sample 50
 """
-import argparse, csv, io, math, re, time, zipfile, json, urllib.request
+import argparse, csv, io, math, os, re, time, zipfile, json, urllib.request
 from collections import defaultdict
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -182,6 +182,38 @@ def fetch_png(url):
     return None
 
 
+def validate_png_on_disk(path: Path) -> bool:
+    """Magic-byte + size check for a PNG file possibly written by a prior crashed run."""
+    try:
+        with open(path, "rb") as fh:
+            head = fh.read(8)
+        return head[:4] == b"\x89PNG" and path.stat().st_size > 200
+    except OSError:
+        return False
+
+
+MANIFEST_FIELDS = ["event_id","label","class","subtype","station","mag",
+                   "event_lat","event_lon","dist_km","date","scan_time","refl","vel"]
+
+
+def load_existing_manifest(path: Path):
+    """Read prior manifest if present. Tolerate a truncated trailing row from a hard crash."""
+    if not path.exists() or path.stat().st_size == 0:
+        return set()
+    done = set()
+    with open(path, newline="") as f:
+        rdr = csv.DictReader(f)
+        try:
+            for row in rdr:
+                eid = row.get("event_id")
+                if eid:
+                    done.add(eid)
+        except csv.Error:
+            # Truncated final line from a hard crash — drop it and trust everything we got.
+            pass
+    return done
+
+
 def fetch_text(url):
     try:
         r = requests.get(url, timeout=20); return r.text if r.status_code == 200 else None
@@ -189,15 +221,23 @@ def fetch_text(url):
         return None
 
 
-def collect(events, out: Path, max_scans, label):
+def collect(events, out: Path, max_scans, label, writer, fh, already_done, counters):
+    """Per-event commit barrier: an event's manifest rows are written ONLY after all its
+    PNGs are downloaded AND validated on disk. Manifest-row presence ⇔ artifacts on disk."""
     raw = out / "raw" / label; raw.mkdir(parents=True, exist_ok=True)
     wdir = out / "wld"; wdir.mkdir(parents=True, exist_ok=True)
-    rows, seen_wld = [], set()
+    seen_wld = set()
+    written_total = 0
+    events_committed_since_fsync = 0
     for ei, ev in enumerate(events):
         station, dist = nearest_station(ev["lat"], ev["lon"])
         if not station: continue
         s = station[1:]
         day = ev["dt"].replace(hour=0, minute=0, second=0, microsecond=0)
+        eid = f'{ev["subtype"]}_{ev["dt"]:%Y%m%d_%H%M}_{station}'
+        if eid in already_done:
+            counters["events_skipped_resume"] += 1
+            continue
         reflt = list_times(s, REFL_PROD, day)
         if not reflt:
             continue
@@ -205,32 +245,73 @@ def collect(events, out: Path, max_scans, label):
         lo, hi = ev["dt"] - timedelta(minutes=WINDOW_BEFORE_MIN), ev["dt"] + timedelta(minutes=WINDOW_AFTER_MIN)
         window = sorted([t for t in reflt if lo <= t <= hi], key=lambda t: abs((t - ev["dt"]).total_seconds()))
         chosen = sorted(window[:max_scans])
-        eid = f'{ev["subtype"]}_{ev["dt"]:%Y%m%d_%H%M}_{station}'
         base = ARCH.format(y=day.year, m=day.month, d=day.day, s=s, prod=REFL_PROD)
         vbase = ARCH.format(y=day.year, m=day.month, d=day.day, s=s, prod=VEL_PROD)
-        n = 0
+        ev_rows = []
         for t in chosen:
-            refl = fetch_png(base + reflt[t]); time.sleep(REQUEST_DELAY_SEC)
-            if refl is None: continue
             ts = t.strftime("%Y%m%d_%H%M")
-            rp = raw / f"{eid}_{ts}_{REFL_PROD}.png"; rp.write_bytes(refl)
+            rp = raw / f"{eid}_{ts}_{REFL_PROD}.png"
+            if rp.exists() and validate_png_on_disk(rp):
+                counters["png_reused"] += 1
+            else:
+                if rp.exists():
+                    rp.unlink()  # corrupt stub from prior crash
+                refl = fetch_png(base + reflt[t]); time.sleep(REQUEST_DELAY_SEC)
+                if refl is None:
+                    continue  # skip this scan; missing reflectivity disqualifies it
+                rp.write_bytes(refl); counters["png_downloaded"] += 1
+                if not validate_png_on_disk(rp):
+                    rp.unlink(missing_ok=True)
+                    continue
             vp = ""; vt = nearest(velt, t, VEL_TOL_MIN)
             if vt:
-                v = fetch_png(vbase + velt[vt]); time.sleep(REQUEST_DELAY_SEC)
-                if v:
-                    vpp = raw / f"{eid}_{ts}_{VEL_PROD}.png"; vpp.write_bytes(v); vp = str(vpp.relative_to(out))
+                vpp = raw / f"{eid}_{ts}_{VEL_PROD}.png"
+                if vpp.exists() and validate_png_on_disk(vpp):
+                    counters["png_reused"] += 1
+                    vp = str(vpp.relative_to(out))
+                else:
+                    if vpp.exists():
+                        vpp.unlink()
+                    v = fetch_png(vbase + velt[vt]); time.sleep(REQUEST_DELAY_SEC)
+                    if v:
+                        vpp.write_bytes(v); counters["png_downloaded"] += 1
+                        if validate_png_on_disk(vpp):
+                            vp = str(vpp.relative_to(out))
+                        else:
+                            vpp.unlink(missing_ok=True)
             if station not in seen_wld:
-                w = fetch_text(base + reflt[t].replace(".png", ".wld"))
-                if w: (wdir / f"{station}.wld").write_text(w); seen_wld.add(station)
-            rows.append({"event_id": eid, "label": 1 if label == "tornado" else 0, "class": label,
-                         "subtype": ev["subtype"], "station": station, "mag": ev["mag"],
-                         "event_lat": ev["lat"], "event_lon": ev["lon"], "dist_km": round(dist, 1),
-                         "date": ev["dt"].strftime("%Y-%m-%d"), "scan_time": t.strftime("%Y-%m-%dT%H:%MZ"),
-                         "refl": str(rp.relative_to(out)), "vel": vp})
-            n += 1
+                wld_path = wdir / f"{station}.wld"
+                if wld_path.exists() and wld_path.read_text().strip():
+                    seen_wld.add(station)
+                else:
+                    w = fetch_text(base + reflt[t].replace(".png", ".wld"))
+                    if w:
+                        wld_path.write_text(w); seen_wld.add(station)
+            ev_rows.append({"event_id": eid, "label": 1 if label == "tornado" else 0, "class": label,
+                            "subtype": ev["subtype"], "station": station, "mag": ev["mag"],
+                            "event_lat": ev["lat"], "event_lon": ev["lon"], "dist_km": round(dist, 1),
+                            "date": ev["dt"].strftime("%Y-%m-%d"), "scan_time": t.strftime("%Y-%m-%dT%H:%MZ"),
+                            "refl": str(rp.relative_to(out)), "vel": vp})
+        if not ev_rows:
+            continue
+        # COMMIT BARRIER: all artifacts on disk; flush rows for this event together.
+        writer.writerows(ev_rows)
+        fh.flush()
+        already_done.add(eid)
+        written_total += len(ev_rows)
+        counters["events_committed"] += 1
+        events_committed_since_fsync += 1
+        if events_committed_since_fsync >= 25:
+            os.fsync(fh.fileno())
+            events_committed_since_fsync = 0
         if (ei + 1) % 50 == 0:
-            print(f"  ...{label}: {ei+1}/{len(events)} events, {len(rows)} scans so far")
-    return rows
+            print(f"  ...{label}: {ei+1}/{len(events)} events, "
+                  f"{counters['events_committed']} committed ({written_total} scans), "
+                  f"{counters['events_skipped_resume']} resume-skipped")
+    # Final fsync so the tail of the run is durable even if something kills us next.
+    if events_committed_since_fsync:
+        os.fsync(fh.fileno())
+    return written_total
 
 
 def sub(lst, n):
@@ -267,18 +348,41 @@ def main():
     print(f"  collecting: pos={len(pos)}  neg={len(neg)} "
           f"(hail {min(len(hail),cap_neg)} / wind {min(len(wind),cap_neg)} / warn {min(len(warn),cap_neg)})")
 
-    rows = []
-    print("Collecting positives (tornado)..."); rows += collect(pos, out, args.max_scans, "tornado")
-    print("Collecting negatives...");           rows += collect(neg, out, args.max_scans, "no_tornado")
-
     man = out / "manifest.csv"
-    with open(man, "w", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=["event_id","label","class","subtype","station","mag",
-            "event_lat","event_lon","dist_km","date","scan_time","refl","vel"])
-        w.writeheader(); w.writerows(rows)
-    npos = sum(1 for r in rows if r["label"] == 1); nvel = sum(1 for r in rows if r["vel"])
-    nev = len(set(r["event_id"] for r in rows))
-    print(f"\nDONE  scans={len(rows)}  pos={npos}  neg={len(rows)-npos}  with_velocity={nvel}  events={nev}")
+    already_done = load_existing_manifest(man)
+    if already_done:
+        print(f"resumed: skipping {len(already_done)} already-collected events")
+    fresh = (not man.exists()) or man.stat().st_size == 0
+    # Line-buffered text-mode append; per-event flush + periodic fsync inside collect().
+    fh = open(man, "a", newline="", buffering=1)
+    try:
+        writer = csv.DictWriter(fh, fieldnames=MANIFEST_FIELDS)
+        if fresh:
+            writer.writeheader(); fh.flush()
+        counters = {"events_committed": 0, "events_skipped_resume": 0,
+                    "png_downloaded": 0, "png_reused": 0}
+        print("Collecting positives (tornado)...")
+        npos_written = collect(pos, out, args.max_scans, "tornado", writer, fh, already_done, counters)
+        print("Collecting negatives...")
+        nneg_written = collect(neg, out, args.max_scans, "no_tornado", writer, fh, already_done, counters)
+    finally:
+        fh.close()
+
+    # Final summary reads back the (now fully durable) manifest.
+    rows = []
+    with open(man, newline="") as f:
+        try:
+            rows = list(csv.DictReader(f))
+        except csv.Error:
+            pass
+    npos = sum(1 for r in rows if str(r.get("label")) == "1")
+    nvel = sum(1 for r in rows if r.get("vel"))
+    nev  = len({r["event_id"] for r in rows})
+    print(f"\nDONE  scans={len(rows)}  pos={npos}  neg={len(rows)-npos}  "
+          f"with_velocity={nvel}  events={nev}")
+    print(f"  this run: committed={counters['events_committed']}  "
+          f"resume-skipped={counters['events_skipped_resume']}  "
+          f"png_downloaded={counters['png_downloaded']}  png_reused={counters['png_reused']}")
     print(f"  manifest: {man}")
 
 
