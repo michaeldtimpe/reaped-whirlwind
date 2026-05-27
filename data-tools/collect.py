@@ -14,11 +14,14 @@ nearest-available frames. 150 km range cutoff.
 
 Full run (M4 Pro): see run_collection.sh.  Quick check: --sample 50
 """
-import argparse, csv, io, math, os, re, time, zipfile, json, urllib.request
+import argparse, csv, io, math, os, time, zipfile, json, urllib.request
 from collections import defaultdict
 from datetime import datetime, timedelta
 from pathlib import Path
 import requests
+
+from iem import (ARCH, REFL_PROD, VEL_PROD,
+                 list_times, nearest, fetch_png, fetch_text, validate_png_on_disk)
 
 SPC_TORNADO_URL  = "https://www.spc.noaa.gov/wcm/data/1950-2025_actual_tornadoes.csv"
 SPC_HAIL_URL_FMT = "https://www.spc.noaa.gov/wcm/data/{year}_hail.csv"
@@ -27,9 +30,7 @@ STATIONS_GEOJSON = "https://mesonet.agron.iastate.edu/geojson/network/NEXRAD.geo
 WATCHWARN = ("https://mesonet.agron.iastate.edu/cgi-bin/request/gis/watchwarn.py?accept=shapefile"
              "&year1={y}&month1=1&day1=1&hour1=0&minute1=0&year2={y2}&month2=1&day2=1&hour2=0&minute2=0"
              "&limitps=yes&phenomena=TO&significance=W")
-ARCH = "https://mesonet.agron.iastate.edu/archive/data/{y}/{m:02d}/{d:02d}/GIS/ridge/{s}/{prod}/"
 
-REFL_PROD, VEL_PROD = "N0B", "N0S"
 WINDOW_BEFORE_MIN, WINDOW_AFTER_MIN = 30, 10
 VEL_TOL_MIN = 8
 REQUEST_DELAY_SEC = 0.25
@@ -154,44 +155,6 @@ def fetch_warnings_no_tornado(years, tornado_events, exclude_km=30, exclude_min=
     return out
 
 
-def list_times(s, prod, day):
-    try:
-        txt = requests.get(ARCH.format(y=day.year, m=day.month, d=day.day, s=s, prod=prod), timeout=30).text
-    except requests.RequestException:
-        return {}
-    out = {}
-    for fn in re.findall(rf'{s}_{prod}_(\d{{12}})\.png', txt):
-        try: out[datetime.strptime(fn, "%Y%m%d%H%M")] = f"{s}_{prod}_{fn}.png"
-        except ValueError: pass
-    return out
-
-
-def nearest(times, target, tol_min):
-    if not times: return None
-    dt = min(times, key=lambda t: abs((t - target).total_seconds()))
-    return dt if abs((dt - target).total_seconds()) <= tol_min*60 else None
-
-
-def fetch_png(url):
-    try:
-        r = requests.get(url, timeout=30)
-        if r.status_code == 200 and r.content[:4] == b"\x89PNG" and len(r.content) > 200:
-            return r.content
-    except requests.RequestException:
-        pass
-    return None
-
-
-def validate_png_on_disk(path: Path) -> bool:
-    """Magic-byte + size check for a PNG file possibly written by a prior crashed run."""
-    try:
-        with open(path, "rb") as fh:
-            head = fh.read(8)
-        return head[:4] == b"\x89PNG" and path.stat().st_size > 200
-    except OSError:
-        return False
-
-
 MANIFEST_FIELDS = ["event_id","label","class","subtype","station","mag",
                    "event_lat","event_lon","dist_km","date","scan_time","refl","vel"]
 
@@ -212,13 +175,6 @@ def load_existing_manifest(path: Path):
             # Truncated final line from a hard crash — drop it and trust everything we got.
             pass
     return done
-
-
-def fetch_text(url):
-    try:
-        r = requests.get(url, timeout=20); return r.text if r.status_code == 200 else None
-    except requests.RequestException:
-        return None
 
 
 def collect(events, out: Path, max_scans, label, writer, fh, already_done, counters):
