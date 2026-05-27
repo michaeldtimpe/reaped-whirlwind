@@ -1,0 +1,27 @@
+{
+  "args": {
+    "data": "../data/full",
+    "epochs": 5,
+    "batch": 64,
+    "lr": 0.001,
+    "seed": 42,
+    "out": "runs",
+    "resume": null,
+    "patience": 2
+  },
+  "device": "mps",
+  "best_val_prauc": 0.6596807412508814,
+  "split_scans": {
+    "train": 11300,
+    "val": 2379,
+    "test": 2182
+  },
+  "train_pos": 4354,
+  "train_neg": 6946,
+  "dataset_fingerprint": "52eeff9d84dc3502",
+  "epochs_done": 3,
+  "epochs_since_best": 2,
+  "early_stopped": true,
+  "last_train_loss": 0.7336787960803615,
+  "last_val_prauc": 0.6270743319413248
+}

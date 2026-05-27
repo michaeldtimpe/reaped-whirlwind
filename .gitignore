@@ -33,11 +33,15 @@ data/
 *.log
 logs/
 
-# ML artifacts (weights, exports, large run outputs)
+# ML artifacts (weights, exports, large run outputs).
+# Training-run weights and intermediate artifacts stay out (multi-MB, many runs).
+# We *do* track canonical deployed models under models/<version>/model.pt — the
+# deploy pattern (git archive HEAD | ssh) requires them to be tracked, the file
+# is small (~400 KB), and tracking them makes a model swap reviewable in git.
 *.pt
 *.pth
 *.onnx
 *.npy
 *.npz
-models/
+!models/**/model.pt
 ml/runs/
