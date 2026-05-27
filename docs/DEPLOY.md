@@ -8,8 +8,8 @@ as one compose project named `reaped-whirlwind`.
 | Host | kappa (`192.168.1.248`) |
 | Project dir | `/volume1/docker/reaped-whirlwind` |
 | Compose project | `reaped-whirlwind` |
-| Ports | processor 9005 · weather 9006 · dashboard 9007 |
-| Containers | screenshot-service · radar-image-processor · weather-reporter · pipeline-dashboard |
+| Ports | processor 9005 · weather 9006 · dashboard 9007 · inference 9008 · alerting 9009 |
+| Containers | screenshot-service · radar-image-processor · weather-reporter · pipeline-dashboard · inference-service · alerting-service |
 
 ## First-time setup
 ```bash
@@ -35,12 +35,27 @@ package is restarted. A `restart` avoids that entirely.
 ```bash
 # 1. commit + push
 git push
-# 2. ship the tracked tree to the NAS (scp/SFTP is DISABLED on kappa — use ssh cat-pipe):
+# 2. ship the tracked tree to the NAS (scp/SFTP is DISABLED on kappa — use ssh cat-pipe).
+#    Push .env separately if it has changed (gitignored, so NOT in the archive):
 git archive --format=tar.gz HEAD | ssh magehands@192.168.1.248 'cat > /tmp/rw.tgz'
-# 3. via the relay (root): extract over the project dir (leaves .env + data untouched), fix owner:
-#    tar xzf /tmp/rw.tgz -C /volume1/docker/reaped-whirlwind && chown -R mysterice:users .
-# 4. apply: restart (code/config) or up -d --build (image change)
+ssh magehands@192.168.1.248 'umask 077; cat > /tmp/rw.env' < .env   # only if .env changed
+# 3. via the relay (root) — extract over the project dir, install .env, fix owner. Verify md5s
+#    on both sides first, and back up the live docker-compose.yml + .env in case of rollback:
+#    ts=$(date +%Y%m%d-%H%M%S)
+#    cp -p docker-compose.yml docker-compose.yml.bak.$ts && cp -p .env .env.bak.$ts
+#    tar xzf /tmp/rw.tgz -C /volume1/docker/reaped-whirlwind/
+#    install -m 600 -o 1026 -g 100 /tmp/rw.env /volume1/docker/reaped-whirlwind/.env
+#    chown -R 1026:100 /volume1/docker/reaped-whirlwind/{services,ml,models,data-tools,docs,...}
+#    rm -f /tmp/rw.tgz /tmp/rw.env
+# 4. apply: restart (code/config) or up -d --build (image/deps change).
+#    For long builds, see "Relay 300s timeout" below — kick off via nohup and poll.
 ```
+
+`magehands` now has docker access (added to the `docker` group; `/usr/bin/docker` +
+`/usr/bin/docker-compose` symlinks resolve via the default ssh PATH). So
+`ssh magehands@192.168.1.248 'docker ps'` / `docker logs <name>` work non-interactively — the relay
+is still the right tool for root-required work (chown, file installs), but plain ssh is fine for
+container introspection and `restart`.
 
 ## Synology gotchas (hard-won — do not relearn these in an outage)
 - **The mage-hands relay container is `restart=no`.** Restarting Docker or the Container Manager
@@ -52,13 +67,26 @@ git archive --format=tar.gz HEAD | ssh magehands@192.168.1.248 'cat > /tmp/rw.tg
   restarting the Container Manager package **only after** verifying the new stack is healthy.
 - **Container Manager can't set `privileged`/some options** — manage this stack via CLI compose, not
   the CM GUI, or CM and the CLI will fight over it.
+- **Relay 300s timeout.** `mcp__kappa__run` (the Claude MCP server backed by the relay) hard-caps
+  each command at 300 s. A `docker-compose up -d --build inference alerting` (torch CPU wheel pull,
+  ~5–10 min on first build) WILL appear to time out from Claude's side while still running on
+  kappa. Pattern that works:
+  ```sh
+  nohup sh -c 'docker-compose -p reaped-whirlwind up -d --build inference alerting; \
+               echo exit=$? > /tmp/rw-build.done' > /tmp/rw-build.log 2>&1 < /dev/null &
+  ```
+  Then poll `tail /tmp/rw-build.log` + `mcp__kappa__list_containers` until the new containers show
+  `Status: Up X seconds (healthy)`. Do NOT retry the `up -d --build` from the start — it'll race
+  the original.
 
 ## Verify
 ```bash
-docker ps --filter label=com.docker.compose.project=reaped-whirlwind   # 4 services Up
+docker ps --filter label=com.docker.compose.project=reaped-whirlwind   # 6 services Up
 curl -s localhost:9005/health                                          # processor
 curl -s -o /dev/null -w '%{http_code}\n' localhost:9006                # weather
 curl -s -o /dev/null -w '%{http_code}\n' localhost:9007                # dashboard
+curl -s localhost:9008/health | jq '.status, .last_score'              # inference
+curl -s localhost:9009/health | jq '.status, .active_warnings, .allowed_events'  # alerting
 ls -t /volume1/docker/processed-weather-screenshots | head             # fresh JSON flowing
 ```
 

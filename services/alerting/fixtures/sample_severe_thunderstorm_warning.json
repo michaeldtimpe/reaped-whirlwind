@@ -1,0 +1,28 @@
+{
+  "type": "Feature",
+  "id": "urn:oid:2.49.0.1.840.0.fixture-svr-do-not-act",
+  "geometry": null,
+  "properties": {
+    "@id": "https://api.weather.gov/alerts/urn:oid:2.49.0.1.840.0.fixture-svr-do-not-act",
+    "id": "urn:oid:2.49.0.1.840.0.fixture-svr-do-not-act",
+    "areaDesc": "Tarrant, TX; Dallas, TX",
+    "sent": "2030-05-27T18:30:00-05:00",
+    "effective": "2030-05-27T18:30:00-05:00",
+    "onset": "2030-05-27T18:30:00-05:00",
+    "expires": "2030-05-27T19:15:00-05:00",
+    "ends": "2030-05-27T19:15:00-05:00",
+    "status": "Test",
+    "messageType": "Alert",
+    "category": "Met",
+    "severity": "Severe",
+    "certainty": "Observed",
+    "urgency": "Immediate",
+    "event": "Severe Thunderstorm Warning",
+    "sender": "w-nws.webmaster@noaa.gov",
+    "senderName": "FIXTURE — NWS Fort Worth TX",
+    "headline": "TEST FIXTURE Severe Thunderstorm Warning until 7:15PM CDT (reaped-whirlwind --test-email)",
+    "description": "TEST FIXTURE — do not act. Quarter-size hail and 60 mph wind gusts reported with a line of storms moving east at 40 mph.",
+    "instruction": "TEST FIXTURE — do not act. (Real NWS instruction would say: For your protection move to an interior room on the lowest floor of a building.)",
+    "response": "Shelter"
+  }
+}

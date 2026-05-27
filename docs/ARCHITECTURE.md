@@ -19,9 +19,12 @@ weather ──txt──> weather-reports/  (NWS bulletins + alerts)            �
 IEM RIDGE KFWS N0B+N0S ─────► inference ──► service-status/inference_status.json
                                                                                 │
                                                                                 ▼
-NWS /alerts/active ─────► alerting ──► email (SMTP) ──► you
-                          NWS warning is the alert authority; the model score is
-                          appended as a numeric annotation only.
+NWS /alerts/active ─────► alerting ──► email + SMS (SMTP) ──► you
+                          Filter: event ∈ ALLOWED_EVENTS (warnings only by default).
+                          Suppress: per-alert_id dedupe, per-type 24h cap, 30-min
+                          global cool-off (Tornado Warning bypasses cool-off).
+                          The model annotation rides on Tornado Warning emails
+                          only; for other event types it is "N/A".
 ```
 
 ## Services
@@ -39,9 +42,17 @@ NWS /alerts/active ─────► alerting ──► email (SMTP) ──► 
   the CNN at `models/v1/model.pt`, writes `service-status/inference_status.json`. Refuses to start
   on model SHA / `preprocess_version` mismatch. Does NOT alert.
 - **alerting** (Python, port 9009): every 5 min, GETs NWS `/alerts/active` for the KFWS point,
-  filters to active Tornado Warnings, composes one email per unseen warning with the NWS text first
-  and a small model-readout annotation below, sends via SMTP. Dedupes by `alert_id` in
-  `service-status/alerts_sent.json`. **No NWS warning ⇒ no email.**
+  filters to active alerts whose `event` is in `ALLOWED_EVENTS` (default: eight standard severe-
+  weather Warnings — Tornado, Severe Thunderstorm, Flash Flood, Flood, High Wind, Winter Storm, Ice
+  Storm, Extreme Wind — watches/advisories opt-in via `.env`). For each unseen alert, composes an
+  email (full body to `ALERT_TO`) and an SMS (~140-char body to `ALERT_TO_SMS`) with the NWS text
+  first; Tornado Warnings additionally carry the model score as a numeric annotation, other event
+  types show "model readout N/A — CNN assesses tornado risk only." Sends via SMTP. Layered
+  suppression: (a) dedupe by `alert_id` in `service-status/alerts_sent.json` (one notification per
+  id, ever); (b) per-event-type rolling 24 h cap (`DAILY_CAP_SECONDS`); suppressed rows are stored
+  with `outcome=suppressed_daily_cap`; (c) global 30-min cool-off (`COOL_OFF_SECONDS`), bypassed by
+  events listed in `COOL_OFF_BYPASS_EVENTS` (default: just Tornado Warning so a tornado after a
+  flood is never delayed). **No NWS warning in `ALLOWED_EVENTS` ⇒ no email.**
 
 ## Shared host volumes (bind-mounted, not in repo)
 | Host path | Writer → Readers |
@@ -76,10 +87,17 @@ directly from `ml/preprocess.py`; the model is loaded with `weights_only=True` f
 `models/v1/model.pt`.
 
 **Alerting** (Part C, done): NWS warning is primary, unconditional, independent. The model is
-permanently experimental; its score is a numeric annotation on emails that the NWS warning
-triggers. Email subject is `Tornado Warning: <area> (model: elevated|not elevated|unavailable)`.
-Body has the full NWS text first and the model readout below in mechanical language ("score below
-threshold", "radar features did not reach cutoff") — no "agrees/disagrees/sees" phrasing.
+permanently experimental; its score is a numeric annotation on Tornado Warning emails only. For
+other event types in `ALLOWED_EVENTS` the model section reads "N/A — CNN assesses tornado risk on
+KFWS only," and the email/SMS is a direct relay of the NWS text. Tornado Warning email subject is
+`Tornado Warning: <area> (model: elevated|not elevated|unavailable)`. Body has the full NWS text
+first and the model readout below in mechanical language ("score below threshold", "radar features
+did not reach cutoff") — no "agrees/disagrees/sees" phrasing.
+
+Anti-spam: one notification per `alert_id` (ever), one per event type per rolling 24 h, one per 30
+min globally — with Tornado Warning bypassing the 30-min cool-off so a tornado after a flood is
+never delayed. All limits are env-tunable. See `services/alerting/AGENT.md` for the suppression-
+order invariant.
 
 ## Why doesn't inference reuse the screenshot/processor pipeline?
 The screenshot service captures `radar.weather.gov` (a *visualization* — palette + style + chrome)

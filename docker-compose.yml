@@ -145,10 +145,13 @@ services:
       retries: 3
       start_period: 30s
 
-  # ---- Part C: NWS-gated alerting (experimental annotation only) -----------
-  # Every 5 min: fetch active NWS alerts for KFWS, filter to Tornado Warnings,
-  # email each unseen one with the model score appended as an annotation.
-  # No NWS warning ⇒ no email. Model never originates an alert.
+  # ---- Part C: NWS-gated multi-event alerting (experimental annotation) ----
+  # Every 5 min: fetch active NWS alerts for KFWS, filter to ALLOWED_EVENTS
+  # (warnings only by default), email/SMS each unseen one. Tornado Warning
+  # additionally carries the model score as a numeric annotation. Suppression
+  # is layered: per-alert_id dedupe, per-type rolling-24h cap, global
+  # COOL_OFF_SECONDS throttle (Tornado Warning bypasses cool-off).
+  # No NWS warning in ALLOWED_EVENTS ⇒ no email. Model never originates an alert.
   alerting:
     build: ./services/alerting
     image: reaped-whirlwind-alerting
@@ -165,6 +168,10 @@ services:
       - KFWS_LON=${KFWS_LON:--97.3031}
       - NWS_UA=${NWS_UA:-(reaped-whirlwind alerting, alert@example.com)}
       - MODEL_RISK_THRESHOLD=${MODEL_RISK_THRESHOLD:-0.8}
+      - ALLOWED_EVENTS=${ALLOWED_EVENTS:-Tornado Warning,Severe Thunderstorm Warning,Flash Flood Warning,Flood Warning,High Wind Warning,Winter Storm Warning,Ice Storm Warning,Extreme Wind Warning}
+      - DAILY_CAP_SECONDS=${DAILY_CAP_SECONDS:-86400}
+      - COOL_OFF_SECONDS=${COOL_OFF_SECONDS:-1800}
+      - COOL_OFF_BYPASS_EVENTS=${COOL_OFF_BYPASS_EVENTS:-Tornado Warning}
       - SMTP_HOST=${SMTP_HOST}
       - SMTP_PORT=${SMTP_PORT:-587}
       - SMTP_USER=${SMTP_USER}
