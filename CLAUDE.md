@@ -19,7 +19,7 @@ alert — this model is a research layer and will not beat NWS. It stays permane
   run.json + eval.json + MANIFEST.md). Eval: PR-AUC 0.485 vs baselines 0.26-0.34; 5 % FP on
   `warning_no_tornado` (the hardest negative class); higher hail/wind FPs deliberately made
   operationally irrelevant by Part C's NWS gate. See `docs/MODEL_CARD.md`.
-- **Part C — code DONE, deploy PENDING.** Two new services:
+- **Part C — code DONE + locally verified, kappa deploy PENDING.** Two new services:
   - `services/inference/` (port 9008) fetches IEM RIDGE KFWS N0B+N0S every 5 min, runs the
     canonical CNN, writes `service-status/inference_status.json`. Uses the *same* preprocess
     transform as training (`ml/preprocess.decode_crop`); the bit-equivalence regression test
@@ -27,31 +27,45 @@ alert — this model is a research layer and will not beat NWS. It stays permane
   - `services/alerting/` (port 9009) polls NWS `/alerts/active` every 5 min; sends one email per
     active Tornado Warning with the NWS text first and the model's score as a numeric annotation
     below. **No NWS warning ⇒ no email.** Dedup by NWS alert id; SMTP timeout=10; cap 5 per cycle.
-  - Compose + dashboard wiring is in. `.env.example` documents the new knobs.
-  - Not yet pushed to kappa. See "Deploy here" below.
+    Multi-recipient: `ALERT_TO` (full body) + `ALERT_TO_SMS` (~140-char body for email→SMS
+    gateway). Live SMTP smoke verified end-to-end via Gmail App Password to both michaeldtimpe@gmail.com
+    AND a Google Fi SMS gateway.
+  - Compose + dashboard wiring is in. `.env` lives at the repo root (gitignored) with all
+    SMTP / NWS / KFWS / threshold values. Both arrive at gmail + SMS in <60s when sent.
+  - Not yet pushed to kappa. The next session is the kappa deploy — user will provide MCP
+    tools for kappa so the deploy can run remotely from Claude.
 
 Full design rationale + review history lived in a local plan file
 (`~/.claude/plans/eager-cooking-hollerith.md`) during development; the essentials are captured
 in `docs/`.
 
-## Deploy here (after Part C code is committed; next session)
-On any machine that can reach kappa via the mage-hands relay:
+## Resume here (next session): kappa deploy
+
+The user is bringing up MCP tools for kappa so this can be driven from Claude.
+Once those tools are available, the deploy sequence is:
+
 ```bash
 # 1) pre-flight: confirm 9008/9009 free on kappa
 ssh magehands@192.168.1.248 'sudo ss -tlnp | grep -E ":900[89]"' || true
 
-# 2) push code + model
+# 2) push code + model. .env on kappa lives at /volume1/docker/reaped-whirlwind/.env;
+#    if it doesn't exist yet, scp/cat the local .env there (same values, same path).
 git archive HEAD | ssh magehands@192.168.1.248 'cat > /tmp/rw.tgz'
-# (relay-extract per docs/DEPLOY.md)
+# (relay-extract per docs/DEPLOY.md — never bounce Docker via the relay)
 
 # 3) bring up the new services
 ssh magehands@192.168.1.248 'cd /volume1/docker/reaped-whirlwind \
   && docker-compose -p reaped-whirlwind up -d --build inference alerting dashboard'
 
-# 4) verify
-curl http://kappa:9008/health   # inference
-curl http://kappa:9009/health   # alerting
+# 4) verify on kappa
+curl http://kappa:9008/health   # inference: expect status "running" within ~5 min of first cycle
+curl http://kappa:9009/health   # alerting:  expect status "running"
+# active_tornado_warnings should be 0 unless there's a real warning right now.
 ```
+
+**Expectations on first kappa build:** torch CPU wheel pull is ~200 MB, build takes 5-10 min.
+After that, restarts are instant. Once both services are up, the dashboard at 9007 will
+discover them automatically (SERVICES dict entries are already deployed).
 
 ## How to verify Part C without an actual tornado
 ```bash
