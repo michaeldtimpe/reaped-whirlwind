@@ -16,6 +16,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."             # repo root
 DATA="${1:-data/full}"; shift || true
+export PYTHONUNBUFFERED=1           # so per-epoch progress flushes live through tee
 
 # --- runner-owned logging ---
 TS="$(date +%Y%m%d_%H%M%S)"

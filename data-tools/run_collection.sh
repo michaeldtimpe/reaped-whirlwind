@@ -22,6 +22,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."                      # repo root
 OUT="data/full"
 PY="${PYTHON:-python3}"
+export PYTHONUNBUFFERED=1                    # so progress prints flush live through tee
 
 # --- runner-owned logging: tee everything (stdout+stderr) to a timestamped log file ---
 TS="$(date +%Y%m%d_%H%M%S)"
