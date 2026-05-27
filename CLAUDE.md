@@ -9,49 +9,82 @@ attempts to flag tornado risk from radar. **Honesty:** the National Weather Serv
 alert — this model is a research layer and will not beat NWS. It stays permanently labeled
 *experimental*.
 
-## Current status (2026-05-22)
+## Current status (2026-05-27)
 - **Part A — DONE & deployed.** The four services (screenshot / processor / weather / dashboard) are
   unified into ONE compose project **`reaped-whirlwind`**, live on the **kappa** NAS at
   `/volume1/docker/reaped-whirlwind` (ports 9005 processor / 9006 weather / 9007 dashboard).
   Code+config bind-mounted (backend change = `restart`, not rebuild). See `docs/DEPLOY.md`.
-- **Part B — tooling DONE & smoke-tested; the experiment itself is the NEXT action.** Collection,
-  preprocessing, training, and evaluation code are written and validated end-to-end on a tiny set.
-  **The full data collection + CNN training + go/no-go evaluation have NOT been run yet** — that is
-  what to do next, on this analysis machine.
-- **Part C — productionize (live inference + email alerts) — NOT started; GATED on a passing Part-B
-  evaluation.** (`services/inference/`, `alerting/` don't exist yet.)
+- **Part B — DONE.** Full data collection (15,861 scans / 3,198 events), training, and held-out
+  evaluation are all complete. Canonical model lives at `models/v1/` (model.pt + manifest.json +
+  run.json + eval.json + MANIFEST.md). Eval: PR-AUC 0.485 vs baselines 0.26-0.34; 5 % FP on
+  `warning_no_tornado` (the hardest negative class); higher hail/wind FPs deliberately made
+  operationally irrelevant by Part C's NWS gate. See `docs/MODEL_CARD.md`.
+- **Part C — code DONE, deploy PENDING.** Two new services:
+  - `services/inference/` (port 9008) fetches IEM RIDGE KFWS N0B+N0S every 5 min, runs the
+    canonical CNN, writes `service-status/inference_status.json`. Uses the *same* preprocess
+    transform as training (`ml/preprocess.decode_crop`); the bit-equivalence regression test
+    (`services/inference/test_tensor_equiv.py`) passes 5/5 against saved training tensors.
+  - `services/alerting/` (port 9009) polls NWS `/alerts/active` every 5 min; sends one email per
+    active Tornado Warning with the NWS text first and the model's score as a numeric annotation
+    below. **No NWS warning ⇒ no email.** Dedup by NWS alert id; SMTP timeout=10; cap 5 per cycle.
+  - Compose + dashboard wiring is in. `.env.example` documents the new knobs.
+  - Not yet pushed to kappa. See "Deploy here" below.
 
-Full design rationale + review history isn't in this repo (it was in a local plan file); the
-essentials are captured here and in `docs/`.
+Full design rationale + review history lived in a local plan file
+(`~/.claude/plans/eager-cooking-hollerith.md`) during development; the essentials are captured
+in `docs/`.
 
-## Resume here  (run on the analysis machine)
-Prereqs: internet; **Python 3.11–3.13** for training (torch has no 3.14 wheels — the runner
-auto-detects); a few GB free disk.
+## Deploy here (after Part C code is committed; next session)
+On any machine that can reach kappa via the mage-hands relay:
 ```bash
-# 1) collect the domain-matched dataset (smoke test first, then full ~hours run)
-cd data-tools
-./run_collection.sh --sample 30        # ~10 min sanity check (1 recent year)
-./run_collection.sh                    # full run -> ../data/full/tensors/
+# 1) pre-flight: confirm 9008/9009 free on kappa
+ssh magehands@192.168.1.248 'sudo ss -tlnp | grep -E ":900[89]"' || true
 
-# 2) train + evaluate (THE go/no-go)
-cd ..
-./ml/run_training.sh data/full         # builds torch venv, trains CNN, runs evaluate.py
+# 2) push code + model
+git archive HEAD | ssh magehands@192.168.1.248 'cat > /tmp/rw.tgz'
+# (relay-extract per docs/DEPLOY.md)
+
+# 3) bring up the new services
+ssh magehands@192.168.1.248 'cd /volume1/docker/reaped-whirlwind \
+  && docker-compose -p reaped-whirlwind up -d --build inference alerting dashboard'
+
+# 4) verify
+curl http://kappa:9008/health   # inference
+curl http://kappa:9009/health   # alerting
 ```
-Then read `evaluate.py`'s output (saved to `ml/runs/<ts>/eval.json`) — that is the decision.
 
-## The gate (Part-B go/no-go)
-**GO** only if the CNN clearly beats all baselines (reflectivity intensity, velocity shear,
-majority) **and** reaches usable precision at a tolerable false-alarm rate — in particular a low
-false-positive rate on **warning-no-tornado** storms (telling tornadic from severe-but-non-tornadic
-is the actual hard problem). Otherwise it's an honest **NO-GO** → archive / rescope. See
-`docs/MODEL_CARD.md`.
+## How to verify Part C without an actual tornado
+```bash
+# 1) Bit-equivalence regression (mandatory — proves no train/serve skew)
+.venv/bin/python services/inference/test_tensor_equiv.py --n 5
+
+# 2) Inference one-shot smoke against live IEM
+docker-compose -p reaped-whirlwind run --rm inference python /app/inference_service.py --once
+
+# 3) Email pipeline dry-run (no SMTP traffic)
+docker-compose -p reaped-whirlwind run --rm alerting \
+  python /app/alert_service.py --test-email --dry-run
+
+# 4) Real SMTP test (send to ALERT_TO)
+docker-compose -p reaped-whirlwind run --rm alerting \
+  python /app/alert_service.py --test-email
+```
+
+## The Part-B gate verdict (where the soft-GO came from)
+The CNN clears all three baselines (reflectivity intensity, velocity shear, majority) AND has a
+low FP rate on `warning_no_tornado` (5 %, the hardest negative class). Absolute precision is
+modest at higher recall, but that's collapsed by Part C's design — the model is never the alert,
+only an annotation on an NWS-triggered alert. See `docs/MODEL_CARD.md` for the full results +
+tuning notes.
 
 ## Repo layout
 ```
-docker-compose.yml         # Part A: unified stack (deployed on kappa)
-services/ screenshot/ processor/ weather/ dashboard/      # (inference/ = Part C, not yet)
-data-tools/ collect.py run_collection.sh README.md        # Part B data collection
+docker-compose.yml         # unified stack (kappa); now 6 services
+services/ screenshot/ processor/ weather/ dashboard/ inference/ alerting/
+data-tools/ collect.py iem.py run_collection.sh README.md      # Part B data collection
+            (iem.py is shared with services/inference)
 ml/ preprocess.py dataset.py model.py train.py evaluate.py run_training.sh
+models/ v1/ {model.pt, manifest.json, run.json, eval.json, MANIFEST.md}  # canonical deploy
 docs/ ARCHITECTURE.md DEPLOY.md DATA.md MODEL_CARD.md
 ```
 Data (radar tensors, the ~389 GB positives archive, live captures) is **not** in the repo — it's
