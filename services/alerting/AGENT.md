@@ -93,6 +93,22 @@ is sent.
   fields). Other recipients are NOT retried — retrying would
   duplicate-send to the recipients who already got it. Total-failure
   (every send fails) → NOT recorded; next cycle retries all.
+- **Gotcha — "got the SMS but no email" almost always means a wrong
+  `ALERT_TO` address, not a bug.** SMS gateways are just email addresses,
+  so SMS and the full email ride the same `smtp_send_many` batch. A typo
+  in an `ALERT_TO` address (e.g. `michaeltimpe@gmail.com` instead of
+  `michaeldtimpe@gmail.com` — Gmail ignores dots but NOT a missing
+  letter) is still *accepted* by the Gmail submission server: `send_message`
+  returns success, the ledger records `recipients_ok`, and the bounce (if
+  any) arrives asynchronously to `ALERT_FROM` — never to you. So the SMS
+  lands, the ledger looks clean, and the email silently goes to the wrong
+  inbox. When email is missing: (1) verify each `ALERT_TO` address
+  character-for-character against the inbox you actually read; (2) check
+  the recipient's Spam/Promotions (first contact from `ALERT_FROM`);
+  (3) only then suspect SMTP. Confirm a fix end-to-end with
+  `--test-email` overriding recipients to just yourself:
+  `docker exec -e ALERT_TO=you@gmail.com -e ALERT_TO_SMS= alerting-service python alert_service.py --test-email --event "Flood Warning"`
+  (fixed 2026-06-07 — recipient was the host-username spelling).
 
 **Event composition matrix.**
 | event_type        | email subject style                          | email model block      | SMS prefix      |

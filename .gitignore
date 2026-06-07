@@ -45,3 +45,7 @@ logs/
 *.npz
 !models/**/model.pt
 ml/runs/
+
+# Local timestamped backups of .env / compose — contain secrets, never track.
+*.bak
+*.bak.*
