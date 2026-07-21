@@ -9,17 +9,14 @@ __pycache__/
 venv/
 *.egg-info/
 .ipynb_checkpoints/
-
 # OS / editor
 .DS_Store
 *.zip
-
 # Radar imagery / training data only ever lives under data/ (ignored above). The only
 # images intentionally tracked are services/processor/base_*_intensity_scale.png
 # (small color-scale references the processor needs to decode radar -> JSON).
 *.tif
 *.tiff
-
 # Data — bind-mounted from /volume1/docker/... on the NAS, NEVER committed.
 # (The compose file documents the host paths; the data itself stays out of git.)
 weather-screenshots/
@@ -32,7 +29,6 @@ tornado_dataset/
 data/
 *.log
 logs/
-
 # ML artifacts (weights, exports, large run outputs).
 # Training-run weights and intermediate artifacts stay out (multi-MB, many runs).
 # We *do* track canonical deployed models under models/<version>/model.pt — the
@@ -45,7 +41,7 @@ logs/
 *.npz
 !models/**/model.pt
 ml/runs/
-
 # Local timestamped backups of .env / compose — contain secrets, never track.
 *.bak
 *.bak.*
+.claude/snapctx/
