@@ -115,11 +115,10 @@ live in `.env` (gitignored; copy from `.env.example`).
   (`ssh magehands@192.168.1.248 '/usr/local/bin/docker ps'`) or export
   `PATH=/usr/local/bin:$PATH` first. The relay is still the right tool for root-required work;
   magehands ssh (with the full path) is good for `docker ps/logs/exec`.
-- **kappa MCP relay can be down** (cert error) with magehands ssh still working. When that
-  happens, deploys can be done entirely over ssh: `/volume1/docker/reaped-whirlwind` is
-  group-writable by gid 100 (`users`), which `magehands` is in, so `tar -x` as magehands
-  succeeds there without root. Files land owned `magehands:users` instead of `1026:100` —
-  acceptable. See `docs/DEPLOY.md` for the exact ssh-only deploy sequence.
+- **kappa relay is gone** (2026-09-05); `.env` is mode 600/uid 1026, so `magehands` cannot run
+  compose. File transfer + `tar` extract as `magehands` still work; for `.env`-dependent work
+  (config validation, `up -d`), use the throwaway root `docker:cli` container route in
+  `docs/DEPLOY.md`. Never chmod/chown `.env`.
 
 ## Conventions
 - Don't commit data or secrets (`.gitignore` covers `data/`, `.env`, `.venv*/`, `ml/runs/`, weights).

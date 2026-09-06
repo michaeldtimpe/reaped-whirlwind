@@ -64,42 +64,57 @@ the right tool for root-required work (chown, file installs), but plain ssh + th
 fine for container introspection, `restart`, and even `up -d` (see below).
 
 ## Deploying entirely over ssh (no relay)
-If the kappa MCP relay is down (e.g. a cert error) but `ssh magehands@...` still works, you don't
-need the relay for most deploys — `/volume1/docker/reaped-whirlwind` is group-writable by gid 100
-(`users`), and `magehands` is in that group, so `magehands` can extract straight into it without
-root. Files end up owned `magehands:users` instead of `1026:100` — that's fine, it's still
-group-writable the same way.
+The mage-hands relay container no longer exists on kappa (verified 2026-09-05). Additionally, `.env`
+is mode 600 owned by uid 1026 (mysterice), so as `magehands` any `docker-compose ... config` /
+`up -d` fails with `open .../.env: permission denied`. **Do NOT chmod/chown .env.**
+
+The working route: `magehands` is in the docker group, so run `.env`-dependent steps in a throwaway
+root `docker:cli` container that mounts the socket and project dir:
+
 ```bash
 # 1. ship the tracked tree (scp/SFTP is disabled — use the ssh cat-pipe, as above)
 git archive --format=tar.gz HEAD | ssh magehands@192.168.1.248 'cat > /tmp/rw.tgz'
 
-# 2. back up the live docker-compose.yml + .env on kappa before overwriting them
-ssh magehands@192.168.1.248 '
-  cd /volume1/docker/reaped-whirlwind
-  ts=$(date +%Y%m%d-%H%M%S)
-  cp -p docker-compose.yml docker-compose.yml.bak.$ts
-  cp -p .env .env.bak.$ts
-'
+# 2. back up the LIVE compose file + .env BEFORE extracting (root container: .env is 600)
+ssh magehands@192.168.1.248 '/usr/local/bin/docker run --rm \
+  -v /volume1/docker/reaped-whirlwind:/volume1/docker/reaped-whirlwind \
+  -w /volume1/docker/reaped-whirlwind docker:cli \
+  sh -c "ts=\$(date +%Y%m%d-%H%M%S) && \
+         cp -p docker-compose.yml docker-compose.yml.bak.\$ts && \
+         cp -p .env .env.bak.\$ts"'
 
-# 3. extract as magehands (no root needed — gid 100 is writable)
+# 3. remove files deleted from git (tar extract does NOT remove them), then extract as
+#    magehands (no root needed — the dir is gid-100 writable)
+git diff --name-only --diff-filter=D <old> <new> > /tmp/deleted.txt
+ssh magehands@192.168.1.248 'cd /volume1/docker/reaped-whirlwind && xargs rm -f' < /tmp/deleted.txt
 ssh magehands@192.168.1.248 '
   tar xzf /tmp/rw.tgz -C /volume1/docker/reaped-whirlwind/
   rm -f /tmp/rw.tgz
 '
 
-# 4a. code/config-only change → restart, no container recreate:
-ssh magehands@192.168.1.248 '/usr/local/bin/docker-compose -p reaped-whirlwind restart <svc>'
+# 4. validate + recreate via the throwaway root docker:cli container (it needs the socket)
+ssh magehands@192.168.1.248 '/usr/local/bin/docker run --rm \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -v /volume1/docker/reaped-whirlwind:/volume1/docker/reaped-whirlwind \
+  -w /volume1/docker/reaped-whirlwind docker:cli \
+  sh -c "docker compose -p reaped-whirlwind config -q && \
+         docker compose -p reaped-whirlwind up -d --no-build"'
 
-# 4b. compose file changed (new/changed volumes, ports, env defaults, image) → recreate:
-ssh magehands@192.168.1.248 '/usr/local/bin/docker-compose -p reaped-whirlwind up -d'
+# 5. restore canonical ownership (1026:100) on the extracted tracked paths (no brace
+#    expansion — Synology's sh is ash). Leave .env alone.
+ssh magehands@192.168.1.248 '/usr/local/bin/docker run --rm \
+  -v /volume1/docker/reaped-whirlwind:/volume1/docker/reaped-whirlwind \
+  -w /volume1/docker/reaped-whirlwind docker:cli \
+  chown -R 1026:100 services ml models data-tools docs common tests scripts analysis \
+    CLAUDE.md README.md docker-compose.yml .env.example .gitignore pytest.ini requirements-dev.txt'
 ```
+
+**Note:** Compose will recreate every service whose config hash changed. On 2026-09-05, it recreated
+the dashboard even though the image tag was stable.
+
 **A new bind mount (e.g. `./common:/srv/reaped/common:ro`) is a compose-file change** — it requires `up -d`
 (container recreate) on every affected service, not `restart`; `restart` reuses the existing
 container's mount table and will not pick up the new mount.
-
-This path skips the relay-owned steps (root chown to `1026:100`, `.env` install with `install -m
-600 -o 1026 -g 100`) — use those only when the relay is available and you specifically need the
-canonical `1026:100` ownership restored.
 
 ## Synology gotchas (hard-won — do not relearn these in an outage)
 - **The mage-hands relay container is `restart=no`.** Restarting Docker or the Container Manager
