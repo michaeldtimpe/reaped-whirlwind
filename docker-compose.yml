@@ -4,6 +4,11 @@ name: reaped-whirlwind
 # Data lives at absolute host paths under /volume1/docker (bind-mounted, NOT in this repo).
 # Each service's main code + config is bind-mounted too, so backend tweaks apply with
 # `docker-compose restart <service>` instead of a rebuild (see docs/DEPLOY.md).
+# The shared ./common package rides the same pattern: mounted read-only at
+# /srv/reaped/common in every service that imports it. Each service puts the
+# dedicated parent /srv/reaped on sys.path (NOT "/", which would make every
+# top-level dir an importable namespace package), so it imports as `common`.
+# Editing common/*.py = restart, not rebuild.
 
 services:
   screenshot:
@@ -20,6 +25,7 @@ services:
     volumes:
       - ./services/screenshot/screenshot_service.py:/app/screenshot_service.py:ro
       - ./services/screenshot/config.yaml:/app/config.yaml:ro
+      - ./common:/srv/reaped/common:ro  # shared status/nws helpers
       - /volume1/docker/weather-screenshots:/screenshots:rw
       - /volume1/docker/service-status:/status:rw
     mem_limit: 1g
@@ -44,6 +50,7 @@ services:
       - ./services/processor/config.yaml:/app/config.yaml:ro
       - ./services/processor/base_reflectivity_intensity_scale.png:/app/base_reflectivity_intensity_scale.png:ro
       - ./services/processor/base_velocity_intensity_scale.png:/app/base_velocity_intensity_scale.png:ro
+      - ./common:/srv/reaped/common:ro  # shared status/nws helpers
       - /volume1/docker/weather-screenshots:/input:rw
       - /volume1/docker/processed-weather-screenshots:/output:rw
       - /volume1/docker/radar-image-processor-logs:/logs:rw
@@ -74,6 +81,7 @@ services:
       - "9006:9006"
     volumes:
       - ./services/weather/weather_report_generator.py:/app/weather_report_generator.py:ro
+      - ./common:/srv/reaped/common:ro  # shared status/nws helpers
       - /volume1/docker/weather-reports:/logs:rw
       - /volume1/docker/service-status:/status:rw
     mem_limit: 256m
@@ -104,8 +112,11 @@ services:
 
   # ---- Part C: live tornado-risk inference (experimental) ------------------
   # Scores the most recent KFWS N0B+N0S from IEM RIDGE every 5 min.
-  # Writes service-status/inference_status.json. Does NOT alert — the alerting
-  # service consumes the score as an annotation when an NWS warning is active.
+  # Writes service-status/inference_status.json (last score only) plus a
+  # per-cycle line to /logs/scores-YYYYMM.jsonl (the durable history), and
+  # prunes /state/current PNGs older than STATE_RETENTION_DAYS. Does NOT alert —
+  # the alerting service consumes the score as an annotation when an NWS
+  # warning is active.
   inference:
     build: ./services/inference
     image: reaped-whirlwind-inference
@@ -127,12 +138,17 @@ services:
       - MODEL_FINGERPRINT=${MODEL_FINGERPRINT:-}
       - STATUS_PATH=/status/inference_status.json
       - STATE_DIR=/state
+      # Per-cycle score history (month-rotated JSONL) on the inference-logs mount.
+      - SCORE_LOG_PATH=${SCORE_LOG_PATH:-/logs/scores.jsonl}
+      # Age at which cached N0B/N0S PNGs in /state/current are unlinked.
+      - STATE_RETENTION_DAYS=${STATE_RETENTION_DAYS:-14}
     ports:
       - "9008:9008"
     volumes:
       - ./services/inference:/app:ro
       - ./data-tools:/data-tools:ro     # iem.py
       - ./ml:/ml:ro                     # preprocess.py, model.py
+      - ./common:/srv/reaped/common:ro  # shared status/nws helpers
       - ./models/v1:/model:ro           # model.pt + manifest.json
       - /volume1/docker/service-status:/status:rw
       - /volume1/docker/inference-state:/state:rw
@@ -150,8 +166,10 @@ services:
   # (warnings only by default), email/SMS each unseen one. Tornado Warning
   # additionally carries the model score as a numeric annotation. Suppression
   # is layered: per-alert_id dedupe, per-type rolling-24h cap, global
-  # COOL_OFF_SECONDS throttle (Tornado Warning bypasses cool-off).
+  # COOL_OFF_SECONDS throttle (Tornado Warning bypasses BOTH the cap and the
+  # cool-off). Every outcome is appended to /logs/decisions-YYYYMM.jsonl.
   # No NWS warning in ALLOWED_EVENTS ⇒ no email. Model never originates an alert.
+  # KFWS_LAT/KFWS_LON and the event allowlist default to common/nws.py when unset.
   alerting:
     build: ./services/alerting
     image: reaped-whirlwind-alerting
@@ -168,9 +186,14 @@ services:
       - KFWS_LON=${KFWS_LON:--97.3031}
       - NWS_UA=${NWS_UA:-(reaped-whirlwind alerting, alert@example.com)}
       - MODEL_RISK_THRESHOLD=${MODEL_RISK_THRESHOLD:-0.8}
+      # Override knob only — the canonical default allowlist lives in common/nws.py
+      # (DEFAULT_ALLOWED_EVENTS). Keep this literal in sync if you edit it here.
       - ALLOWED_EVENTS=${ALLOWED_EVENTS:-Tornado Warning,Severe Thunderstorm Warning,Flash Flood Warning,Flood Warning,High Wind Warning,Winter Storm Warning,Ice Storm Warning,Extreme Wind Warning}
       - DAILY_CAP_SECONDS=${DAILY_CAP_SECONDS:-86400}
       - COOL_OFF_SECONDS=${COOL_OFF_SECONDS:-1800}
+      # Independent bypass lists: daily cap vs global cool-off. Tornado Warning
+      # is in both by default so an outbreak's 2nd+ warning is never swallowed.
+      - DAILY_CAP_BYPASS_EVENTS=${DAILY_CAP_BYPASS_EVENTS:-Tornado Warning}
       - COOL_OFF_BYPASS_EVENTS=${COOL_OFF_BYPASS_EVENTS:-Tornado Warning}
       - SMTP_HOST=${SMTP_HOST}
       - SMTP_PORT=${SMTP_PORT:-587}
@@ -182,10 +205,13 @@ services:
       - INFERENCE_STATUS_PATH=/status/inference_status.json
       - ALERTS_SENT_PATH=/status/alerts_sent.json
       - STATUS_PATH=/status/alerting_status.json
+      # Durable outcome history — alerts_sent.json is pruned to 48 h.
+      - DECISION_LOG_PATH=${DECISION_LOG_PATH:-/logs/decisions.jsonl}
     ports:
       - "9009:9009"
     volumes:
       - ./services/alerting:/app:ro
+      - ./common:/srv/reaped/common:ro  # shared status/nws helpers
       - /volume1/docker/service-status:/status:rw
       - /volume1/docker/alerting-logs:/logs:rw
     mem_limit: 256m

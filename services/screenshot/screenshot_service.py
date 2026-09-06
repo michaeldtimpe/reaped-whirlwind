@@ -7,14 +7,21 @@ PNG screenshots to an output directory.  Designed to run as a long-lived
 Docker container on a Synology NAS.
 """
 
+import sys
 import yaml
 import time
-import json
 import logging
 from pathlib import Path
 from datetime import datetime, timezone
 from typing import Optional
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
+
+# Shared helpers are bind-mounted at /srv/reaped/common in the container (see
+# docker-compose.yml); outside it they resolve relative to this file.
+# `common` is a package, so its PARENT goes on the path.
+sys.path.insert(0, "/srv/reaped" if Path("/srv/reaped/common").is_dir()
+                else str(Path(__file__).resolve().parents[2]))
+from common.status import atomic_write_json
 
 
 # ── Logging ──────────────────────────────────────────────────────────────────
@@ -58,13 +65,13 @@ class ScreenshotService:
         return datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_UTC")
 
     def _write_status(self):
-        """Persist lightweight status JSON so the dashboard can read it."""
-        path = Path(self.STATUS_FILE)
-        path.parent.mkdir(parents=True, exist_ok=True)
+        """Persist lightweight status JSON so the dashboard can read it.
+        Atomic (tmp + os.replace) so the dashboard never reads a partial file."""
         try:
-            path.write_text(json.dumps(self._stats, indent=2))
-        except OSError:
-            pass  # non-fatal — dashboard will just see stale data
+            atomic_write_json(Path(self.STATUS_FILE), self._stats)
+        except OSError as exc:
+            # non-fatal — dashboard will just see stale data
+            self.log.debug("status write failed: %s", exc)
 
     # ── capture ───────────────────────────────────────────────────────────
 

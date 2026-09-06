@@ -1,0 +1,18 @@
+# Test-only deps: `scripts/test.sh` installs these into .venv and runs pytest.
+# Nothing here ships in a service image.
+pytest>=8.0
+
+# Pinned to match services/inference/requirements.txt so tests exercise the same
+# numeric stack as the deployed inference service (train/serve bit-equivalence).
+numpy==1.26.4
+torch==2.4.1
+Pillow==10.4.0
+requests==2.32.3
+
+# Unpinned: needed only to import the modules under test.
+#   flask  -> services/{alerting,dashboard}
+#   pyyaml -> services/{screenshot,processor} config loading
+#   scipy  -> services/processor/radar_tools (cKDTree colour lookup)
+flask
+pyyaml
+scipy

@@ -279,8 +279,8 @@ class MaskedRadarVerifier(RadarImageVerifier):
 
         print("\n⚠️  IMPORTANT:")
         print("This pixel-based score measures reconstruction accuracy.")
-        print("For ML training quality, use verify_ml.py instead!")
-        print("ML cares about patterns, not pixel-perfect matching.")
+        print("ML cares about patterns, not pixel-perfect matching, so treat")
+        print("a middling pixel score as a prompt to retune, not a blocker.")
 
         # Add to metrics
         metrics["composite_score"] = adjusted_score
@@ -409,8 +409,9 @@ def main():
     print(
         f"\nRecommendation: {'✓ Proceed with this data' if metrics['composite_score'] >= 55 else '⚠ Review conversion settings'}"
     )
-    print(f"\nFor ML-focused metrics, run:")
-    print(f"  python verify_ml.py {args.original_image} {args.data_json}")
+    print(f"\nTo retune the mask or re-check a conversion, run:")
+    print(f"  python tune_mask.py {args.original_image}")
+    print(f"  python verify.py {args.original_image} {args.data_json}")
 
 
 if __name__ == "__main__":

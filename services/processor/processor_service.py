@@ -24,6 +24,13 @@ import multiprocessing
 sys.path.insert(0, '/app')
 from radar_tools import RadarImageConverter
 
+# Shared helpers are bind-mounted at /srv/reaped/common in the container (see
+# docker-compose.yml); outside it they resolve relative to this file.
+# `common` is a package, so its PARENT goes on the path.
+sys.path.insert(0, "/srv/reaped" if Path("/srv/reaped/common").is_dir()
+                else str(Path(__file__).resolve().parents[2]))
+from common.status import atomic_write_json
+
 
 def process_single_image(image_path_str: str, config: dict, status_queue=None) -> tuple:
     """
@@ -225,10 +232,11 @@ class RadarProcessor:
         if env_sample_rate:
             self.config['processing']['sample_rate'] = int(env_sample_rate)
 
-        # Determine number of worker threads
-        # Use cores - 1 to leave one for system, min 1, max 4
+        # Worker count is deliberately pinned to 1, NOT derived from cpu_count:
+        # the NAS is small and docker-compose.yml pins this container to a single
+        # core (cpuset: "3") with cpu_shares 128. cpu_count is logged for context.
         cpu_count = os.cpu_count() or 2
-        self.max_workers = 1  # Pinned to 1 to reduce CPU load on NAS
+        self.max_workers = 1
 
         self.logger.info(f"System has {cpu_count} CPU cores, using {self.max_workers} worker threads")
         self.status.add_log('INFO', f'Initializing with {self.max_workers} worker threads')
@@ -480,11 +488,7 @@ class RadarProcessor:
         if not status_path.parent.exists():
             return  # Volume not mounted, skip silently
         try:
-            status = self.status.get_status()
-            tmp_path = status_path.with_suffix('.tmp')
-            with open(tmp_path, 'w') as f:
-                json.dump(status, f, indent=2)
-            tmp_path.replace(status_path)  # Atomic write
+            atomic_write_json(status_path, self.status.get_status())
         except Exception as e:
             self.logger.warning(f"Could not write status file: {e}")
 

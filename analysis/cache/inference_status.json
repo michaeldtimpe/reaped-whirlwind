@@ -1,0 +1,46 @@
+{
+  "status": "running",
+  "last_score": 0.4096,
+  "last_score_time": "2026-09-06T02:19:40Z",
+  "last_scan_time": "2026-09-06T02:17:00Z",
+  "scan_delta_seconds": 0,
+  "pair_n0b_file": "KFWS_N0B_202609060217.png",
+  "pair_n0s_file": "KFWS_N0S_202609060217.png",
+  "model_sha256": "c0500889dd186c42e956748fc00c58d0fe7656838a827b1a18f855821c24cd60",
+  "model_path": "/model/model.pt",
+  "preprocess_version": "1.0",
+  "threshold": 0.8,
+  "cycle_ms": {
+    "fetch": 820,
+    "preprocess": 13,
+    "infer": 8,
+    "write": 12
+  },
+  "errors": [
+    {
+      "time": "2026-09-05T06:30:27Z",
+      "kind": "fetch",
+      "msg": "no_n0s_within_300s_of_n0b_at_2026-09-05T06:28:00Z"
+    },
+    {
+      "time": "2026-09-05T07:05:34Z",
+      "kind": "fetch",
+      "msg": "no_n0s_within_300s_of_n0b_at_2026-09-05T07:04:00Z"
+    },
+    {
+      "time": "2026-09-05T09:21:03Z",
+      "kind": "fetch",
+      "msg": "no_n0s_within_300s_of_n0b_at_2026-09-05T09:19:00Z"
+    },
+    {
+      "time": "2026-09-05T09:56:10Z",
+      "kind": "fetch",
+      "msg": "no_n0s_within_300s_of_n0b_at_2026-09-05T09:54:00Z"
+    },
+    {
+      "time": "2026-09-05T13:46:58Z",
+      "kind": "fetch",
+      "msg": "no_n0s_within_300s_of_n0b_at_2026-09-05T13:45:00Z"
+    }
+  ]
+}

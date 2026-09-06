@@ -15,6 +15,9 @@ RUN pip install --no-cache-dir --upgrade pip \
 
 # /app is bind-mounted to ./services/inference at runtime (read-only).
 # /data-tools and /ml come in as bind-mounts so we import the shared iem.py and preprocess.py.
+# /srv/reaped/common is bind-mounted too; the service puts its PARENT
+# ("/srv/reaped") on sys.path at startup so it imports as the `common` package —
+# a dedicated parent dir, so no other top-level dir becomes importable.
 ENV PYTHONUNBUFFERED=1 \
     PYTHONPATH=/data-tools:/ml:/app
 

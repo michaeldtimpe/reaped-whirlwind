@@ -1,0 +1,58 @@
+{
+  "status": "running",
+  "last_poll_time": "2026-09-06T02:20:49Z",
+  "active_warnings": 0,
+  "active_tornado_warnings": 0,
+  "active_by_type": {},
+  "emails_sent_total": 0,
+  "emails_sent_this_cycle": 0,
+  "suppressed_daily_cap_this_cycle": 0,
+  "deferred_cool_off_this_cycle": 0,
+  "last_email_id": null,
+  "last_email_time": null,
+  "last_email_event_type": null,
+  "model_state_last_email": null,
+  "cool_off_until": null,
+  "allowed_events": [
+    "Extreme Wind Warning",
+    "Flash Flood Warning",
+    "Flood Warning",
+    "High Wind Warning",
+    "Ice Storm Warning",
+    "Severe Thunderstorm Warning",
+    "Tornado Warning",
+    "Winter Storm Warning"
+  ],
+  "cool_off_bypass_events": [
+    "Tornado Warning"
+  ],
+  "cool_off_seconds": 1800,
+  "daily_cap_seconds": 86400,
+  "errors": [
+    {
+      "time": "2026-09-02T00:16:02Z",
+      "kind": "nws",
+      "msg": "HTTPError: 502 Server Error: Bad Gateway for url: https://api.weather.gov/alerts/active?point=32.5728,-97.3031"
+    },
+    {
+      "time": "2026-09-02T01:01:04Z",
+      "kind": "nws",
+      "msg": "HTTPError: 502 Server Error: Bad Gateway for url: https://api.weather.gov/alerts/active?point=32.5728,-97.3031"
+    },
+    {
+      "time": "2026-09-03T05:47:29Z",
+      "kind": "nws",
+      "msg": "ReadTimeout: HTTPSConnectionPool(host='api.weather.gov', port=443): Read timed out. (read timeout=10)"
+    },
+    {
+      "time": "2026-09-03T19:23:11Z",
+      "kind": "nws",
+      "msg": "ReadTimeout: HTTPSConnectionPool(host='api.weather.gov', port=443): Read timed out. (read timeout=10)"
+    },
+    {
+      "time": "2026-09-06T02:00:49Z",
+      "kind": "nws",
+      "msg": "ReadTimeout: HTTPSConnectionPool(host='api.weather.gov', port=443): Read timed out. (read timeout=10)"
+    }
+  ]
+}

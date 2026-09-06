@@ -24,7 +24,9 @@ model-disagrees email as "probably not serious." Edit `compose_email`
 with care.
 
 **Suppression order — get this exactly right.**
-The order in `run_cycle` is intentional. Each rule has a different effect
+`decide_alert()` is the pure function that applies it (no SMTP, no
+network, no clock — see the module docstring's TESTING SEAM); `run_cycle`
+only executes the returned `Decision`. The order is intentional. Each rule has a different effect
 on the ledger (write-suppressed vs defer) and getting the order wrong
 will either send duplicates or starve a tornado:
 
@@ -35,6 +37,7 @@ will either send duplicates or starve a tornado:
    `DAILY_CAP_SECONDS`) → write a row with `outcome="suppressed_daily_cap"`.
    Only `outcome=="sent"` rows count toward the lookback — so a row that's
    itself suppressed doesn't extend the suppression window.
+   Skipped entirely if `event_type ∈ DAILY_CAP_BYPASS_EVENTS`.
 4. **Cool-off** (`latest_sent_at`, window = `COOL_OFF_SECONDS`) → defer
    (NOT to ledger). Skipped entirely if `event_type ∈ COOL_OFF_BYPASS_EVENTS`.
    This is the bypass that protects Tornado Warning from getting stuck
@@ -49,6 +52,16 @@ PM and another at 12:05 AM would count as two different days, which is
 not what "1 per day" usually means. Rolling 24 h ("within the last
 86400 s") removes the timezone question entirely and matches the
 intuitive "wait a day before alerting again" reading.
+
+**Why Tornado Warning bypasses the daily cap** (fixed after
+`docs/RETROSPECTIVE.md` §3 flagged it P0). A DFW outbreak issues several
+sequential Tornado Warnings for one point; under a per-type 24 h cap,
+warning #2 onward was written to the ledger as `suppressed_daily_cap`
+and never sent. `DAILY_CAP_BYPASS_EVENTS` (default `Tornado Warning`)
+skips layer 3 entirely. Bypassed types still respect per-`alert_id`
+dedupe and the per-cycle cap of 5, so a stuck NWS feed still cannot
+produce an email storm. The two bypass lists are **independent** — a
+type may be in one, both or neither.
 
 **Why Tornado Warning bypasses cool-off.** If we just sent a Flood
 Warning and a tornado pops up 5 min later, holding the tornado alert for
@@ -135,3 +148,14 @@ is sent.
 - `fixtures/sample_severe_thunderstorm_warning.json` — SVR fixture.
 - `fixtures/sample_flash_flood_warning.json` — FFW fixture.
 - `README.md` — operator-facing summary.
+
+**Decision log.** `alerts_sent.json` is the 48 h dedupe set and nothing
+more — `save_ledger()` prunes it every cycle, so it can never answer "was
+that email ever actually sent?". Every non-trivial outcome (`sent`,
+`suppressed_daily_cap`, `deferred_cool_off`, `smtp_error`,
+`config_error`, `nws_error`) is therefore also appended to
+`DECISION_LOG_PATH` (default `/logs/decisions.jsonl`, rotated monthly to
+`decisions-YYYYMM.jsonl` on the `alerting-logs` mount). It is
+append-only, best-effort and **never** raises: a broken `/logs` costs a
+log line, never an email. It does not feed `emails_sent_total`, which is
+still the in-memory per-process counter it always was.

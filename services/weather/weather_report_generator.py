@@ -6,7 +6,6 @@ via a built-in HTTP server.
 """
 
 import html
-import json
 import os
 import sys
 import time
@@ -17,6 +16,14 @@ from threading import Thread
 from typing import Dict, Optional
 
 import requests
+
+# Shared helpers are bind-mounted at /srv/reaped/common in the container (see
+# docker-compose.yml); outside it they resolve relative to this file.
+# `common` is a package, so its PARENT goes on the path.
+sys.path.insert(0, "/srv/reaped" if Path("/srv/reaped/common").is_dir()
+                else str(Path(__file__).resolve().parents[2]))
+from common.status import atomic_write_json
+from common.nws import fetch_active_alerts
 
 
 # ── Configuration ────────────────────────────────────────────────────────────
@@ -63,9 +70,18 @@ class Fetcher:
         return self._get(url)
 
     def alerts(self) -> Optional[Dict]:
-        return self._get(
-            f"{self.cfg.NWS_API}/alerts/active?point={self.cfg.LATITUDE},{self.cfg.LONGITUDE}"
-        )
+        """Active alerts as {"features": [...]} — same shape and same
+        None-on-API-error semantics as the other fetchers; only the HTTP call
+        itself moved to common.nws."""
+        try:
+            features = fetch_active_alerts(
+                self.cfg.LATITUDE, self.cfg.LONGITUDE,
+                user_agent=self.cfg.NWS_UA, timeout=10,
+            )
+        except requests.RequestException as e:
+            print(f"API error: {e}")
+            return None
+        return {"features": features}
 
 
 # ── Formatter ────────────────────────────────────────────────────────────────
@@ -227,11 +243,10 @@ def _write_status(cfg: Config, report: str, ok: bool):
         "region": cfg.REGION_NAME,
     }
     p = Path("/status/weather_status.json")
-    p.parent.mkdir(parents=True, exist_ok=True)
     try:
-        p.write_text(json.dumps(status, indent=2))
-    except OSError:
-        pass
+        atomic_write_json(p, status)   # tmp + os.replace: never a half-read status
+    except OSError as e:
+        print(f"Could not write status file: {e}")
 
 
 # ── Main generator ───────────────────────────────────────────────────────────

@@ -12,6 +12,10 @@ Every POLL_INTERVAL seconds:
      code path as training. This is the no-train/serve-skew guarantee.
   4. Forward through TornadoCNN; sigmoid to [0,1].
   5. Atomically rewrite /status/inference_status.json.
+  6. Append one line to SCORE_LOG_PATH (month-rotated JSONL) — the status file
+     only ever holds the LAST score, so without this there is no history to
+     answer "what did the model do during that storm?".
+  7. Prune cached PNGs older than STATE_RETENTION_DAYS from /state/current.
 
 CLI:
   python inference_service.py                # service loop (Flask /health + bg poll)
@@ -21,9 +25,15 @@ import argparse, gc, hashlib, json, os, sys, threading, time
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
-# Shared modules live under bind-mounted dirs; see docker-compose volumes.
-sys.path.insert(0, "/data-tools")
-sys.path.insert(0, "/ml")
+# Shared modules live under bind-mounted dirs (see docker-compose volumes):
+# /data-tools, /ml and /srv/reaped/common. Outside the container (running from a
+# checkout on the analysis machine) they resolve relative to this file instead.
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+for _name in ("data-tools", "ml"):
+    _dir = Path("/" + _name)
+    sys.path.insert(0, str(_dir if _dir.is_dir() else _REPO_ROOT / _name))
+# `common` is a package, so its PARENT goes on the path.
+sys.path.insert(0, "/srv/reaped" if Path("/srv/reaped/common").is_dir() else str(_REPO_ROOT))
 
 import numpy as np
 import torch
@@ -34,33 +44,34 @@ from iem import (ARCH, REFL_PROD, VEL_PROD,
 from preprocess import decode_crop, load_wld, REFL, VEL, PREPROCESS_VERSION
 from model import TornadoCNN
 
+from common import nws
+from common.jsonlog import append_jsonl
+from common.status import atomic_write_json, deep_copy_json, utc_iso
+
 # ---- config from env (set in docker-compose.yml) -----------------------------
 PORT             = int(os.environ.get("PORT", "9008"))
 POLL_INTERVAL    = int(os.environ.get("POLL_INTERVAL", "300"))         # 5 min
 MAX_PAIR_DELTA   = int(os.environ.get("MAX_PAIR_DELTA_SECONDS", "300"))
 MAX_SCORE_AGE    = int(os.environ.get("MAX_SCORE_AGE_SECONDS", "1800"))
-KFWS_LAT         = float(os.environ.get("KFWS_LAT",  "32.5728"))
-KFWS_LON         = float(os.environ.get("KFWS_LON", "-97.3031"))
+KFWS_LAT         = float(os.environ.get("KFWS_LAT",  str(nws.KFWS_LAT)))
+KFWS_LON         = float(os.environ.get("KFWS_LON", str(nws.KFWS_LON)))
 THRESHOLD        = float(os.environ.get("MODEL_RISK_THRESHOLD", "0.8"))
 MODEL_PATH       = Path(os.environ.get("MODEL_PATH", "/model/model.pt"))
 MANIFEST_PATH    = Path(os.environ.get("MANIFEST_PATH", "/model/manifest.json"))
 EXPECTED_FP_ENV  = os.environ.get("MODEL_FINGERPRINT", "").strip()     # env wins over manifest
 STATUS_PATH      = Path(os.environ.get("STATUS_PATH", "/status/inference_status.json"))
 STATE_DIR        = Path(os.environ.get("STATE_DIR", "/state"))
+SCORE_LOG_PATH   = Path(os.environ.get("SCORE_LOG_PATH", "/logs/scores.jsonl"))
+# Cached N0B/N0S PNGs are re-fetched every cycle and never re-read, so retention
+# is purely for post-hoc inspection. Unbounded, this dir grew to 2.5 GB in 101 days.
+STATE_RETENTION_DAYS = int(os.environ.get("STATE_RETENTION_DAYS", "14"))
 
 KFWS_STATION       = "KFWS"
 CYCLE_DEADLINE_SEC = 60.0
 
 
 # ---- helpers -----------------------------------------------------------------
-def utc_iso(dt=None):
-    if dt is None:
-        dt = datetime.now(timezone.utc)
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
+# utc_iso / atomic_write_json / deep_copy_json come from common.status.
 def sha256_file(p: Path) -> str:
     h = hashlib.sha256()
     with open(p, "rb") as f:
@@ -72,16 +83,6 @@ def sha256_file(p: Path) -> str:
 def fail(msg: str, code: int = 1):
     sys.stderr.write(f"FATAL: {msg}\n")
     sys.exit(code)
-
-
-def atomic_write_json(path: Path, obj):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    with open(tmp, "w") as f:
-        json.dump(obj, f, indent=2)
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(tmp, path)
 
 
 # ---- startup correctness chain ----------------------------------------------
@@ -187,12 +188,83 @@ def build_tensor(n0b_path: Path, n0s_path: Path, wld_path: Path) -> torch.Tensor
     return torch.from_numpy(arr).unsqueeze(0)
 
 
+# ---- operational logging + cache hygiene ------------------------------------
+def append_score_log(state: "State", timings: dict, n0b_time, n0s_time, elapsed: float):
+    """One JSONL line per cycle, whatever the outcome. Never raises: a broken
+    /logs mount must not stop the service from scoring."""
+    try:
+        s = state.snapshot()
+        errs = s.get("errors") or []
+        ok = s.get("status") == "running"
+        record = {
+            "ts":                 utc_iso(),
+            "status":             s.get("status"),
+            # Only report a score the CURRENT cycle produced — last_score lingers
+            # in the status file when a cycle goes stale, and logging that would
+            # fabricate history.
+            "score":              s.get("last_score") if ok else None,
+            "n0b_time":           utc_iso(n0b_time) if n0b_time else None,
+            "n0s_time":           utc_iso(n0s_time) if n0s_time else None,
+            "scan_delta_seconds": s.get("scan_delta_seconds") if ok else None,
+            "fetch_ms":           timings.get("fetch"),
+            "infer_ms":           timings.get("infer"),
+            "cycle_ms":           int(elapsed * 1000),
+            "error":              None if ok or not errs else errs[-1].get("kind"),
+            "error_msg":          None if ok or not errs else errs[-1].get("msg"),
+            "model_sha256":       s.get("model_sha256"),
+            "threshold":          s.get("threshold"),
+        }
+    except Exception:
+        return
+    append_jsonl(SCORE_LOG_PATH, record)
+
+
+def prune_png_cache(state: "State" = None, retention_days: int = None) -> int:
+    """Delete cached PNGs older than STATE_RETENTION_DAYS from STATE_DIR/current.
+
+    Safe by construction: bounded to that one directory (no recursion), only
+    files literally named *.png, never follows symlinks, and every error is
+    recorded rather than raised. Nothing the current cycle needs can be hit —
+    `fetch_pair` re-downloads both PNGs every cycle and never reads a cached one.
+    Returns the number of files removed."""
+    days = STATE_RETENTION_DAYS if retention_days is None else retention_days
+    cache = STATE_DIR / "current"
+    if days <= 0:
+        return 0
+    cutoff = time.time() - days * 86400
+    removed = 0
+    try:
+        entries = list(os.scandir(cache))
+    except OSError:
+        return 0            # cache not created yet — nothing to prune
+    for entry in entries:
+        try:
+            if not entry.name.endswith(".png"):
+                continue
+            if not entry.is_file(follow_symlinks=False):
+                continue
+            if entry.stat(follow_symlinks=False).st_mtime >= cutoff:
+                continue
+            os.unlink(entry.path)
+            removed += 1
+        except OSError as e:
+            if state is not None:
+                state.record_error("prune", f"{entry.name}: {type(e).__name__}: {e}")
+    if removed:
+        sys.stderr.write(f"pruned {removed} cached PNG(s) older than {days}d from {cache}\n")
+    return removed
+
+
 # ---- service state -----------------------------------------------------------
 class State:
-    def __init__(self, model, model_sha256, manifest):
+    def __init__(self, model, model_sha256, manifest, wld_path=None):
         self.model = model
         self.model_sha256 = model_sha256
         self.manifest = manifest
+        # Cached KFWS.wld. Written only by the single poll thread (or the --once
+        # path), so a successful re-fetch survives to the NEXT cycle instead of
+        # being re-fetched forever after a first-boot IEM outage.
+        self.wld_path = wld_path
         self.lock = threading.Lock()
         self.last_status = {
             "status": "uninitialized",
@@ -218,7 +290,7 @@ class State:
 
     def snapshot(self):
         with self.lock:
-            return json.loads(json.dumps(self.last_status))   # deep copy via JSON
+            return deep_copy_json(self.last_status)
 
     def commit(self, status):
         """Replace last_status and atomically write the JSON file."""
@@ -228,9 +300,10 @@ class State:
 
 
 # ---- cycle -------------------------------------------------------------------
-def run_cycle(state: State, wld_path: Path) -> dict:
+def run_cycle(state: State) -> dict:
     t0 = time.time()
     timings = {}
+    n0b_time = n0s_time = None      # bound up-front so the finally can always log
     status = state.snapshot()
     status["cycle_ms"] = {}
 
@@ -254,16 +327,17 @@ def run_cycle(state: State, wld_path: Path) -> dict:
             state.commit(status)
             return status
 
-        if not wld_path.exists():
-            wld_path_local = get_wld_path()
-            if not wld_path_local.exists():
+        wld_path = state.wld_path
+        if wld_path is None or not wld_path.exists():
+            wld_path = get_wld_path()
+            if not wld_path.exists():
                 state.record_error("wld", "wld unavailable after retry")
                 status = state.snapshot()
                 status["status"] = "error"
                 status["cycle_ms"] = timings
                 state.commit(status)
                 return status
-            wld_path = wld_path_local
+            state.wld_path = wld_path   # cache it; later cycles skip the re-fetch
 
         t_p = time.time()
         x = build_tensor(n0b, n0s, wld_path)
@@ -307,13 +381,15 @@ def run_cycle(state: State, wld_path: Path) -> dict:
         elapsed = time.time() - t0
         if elapsed > CYCLE_DEADLINE_SEC:
             state.record_error("deadline", f"cycle {elapsed:.1f}s > {CYCLE_DEADLINE_SEC}s")
+        append_score_log(state, timings, n0b_time, n0s_time, elapsed)
+        prune_png_cache(state)
 
 
 # ---- service loop + Flask /health -------------------------------------------
-def poll_loop(state, wld_path):
+def poll_loop(state):
     while True:
         try:
-            run_cycle(state, wld_path)
+            run_cycle(state)
         except Exception as e:
             state.record_error("loop", f"{type(e).__name__}: {e}")
         time.sleep(POLL_INTERVAL)
@@ -345,18 +421,16 @@ def main():
     args = ap.parse_args()
 
     model, sha, manifest = startup_check_and_load_model()
-    state = State(model, sha, manifest)
+    state = State(model, sha, manifest, wld_path=get_wld_path())
     state.commit(state.last_status)   # writes the initial "uninitialized" status
 
-    wld_path = get_wld_path()
-
     if args.once:
-        status = run_cycle(state, wld_path)
+        status = run_cycle(state)
         print(json.dumps(status, indent=2))
         sys.exit(0 if status.get("status") == "running" else 1)
 
     app = make_app(state)
-    t = threading.Thread(target=poll_loop, args=(state, wld_path), daemon=True)
+    t = threading.Thread(target=poll_loop, args=(state,), daemon=True)
     t.start()
     app.run(host="0.0.0.0", port=PORT, use_reloader=False, threaded=True)
 

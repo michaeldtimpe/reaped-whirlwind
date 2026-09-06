@@ -9,7 +9,7 @@ attempts to flag tornado risk from radar. **Honesty:** the National Weather Serv
 alert — this model is a research layer and will not beat NWS. It stays permanently labeled
 *experimental*.
 
-## Current status (2026-05-27)
+## Current status (2026-09-05)
 - **Part A — DONE & deployed.** The four services (screenshot / processor / weather / dashboard) are
   unified into ONE compose project **`reaped-whirlwind`**, live on the **kappa** NAS at
   `/volume1/docker/reaped-whirlwind` (ports 9005 processor / 9006 weather / 9007 dashboard).
@@ -30,12 +30,25 @@ alert — this model is a research layer and will not beat NWS. It stays permane
     Warning, Flash Flood Warning, Flood Warning, High Wind Warning, Winter Storm Warning, Ice Storm
     Warning, Extreme Wind Warning). Layered suppression: per-`alert_id` dedupe, per-event-type
     rolling 24 h cap (`DAILY_CAP_SECONDS`), global 30-min cool-off (`COOL_OFF_SECONDS`) — Tornado
-    Warning bypasses cool-off (`COOL_OFF_BYPASS_EVENTS`). Tornado Warning carries the model score
+    Warning bypasses both, via the independent `DAILY_CAP_BYPASS_EVENTS` and
+    `COOL_OFF_BYPASS_EVENTS` lists, so an outbreak's 2nd+ warning still sends. Tornado Warning carries the model score
     as a numeric annotation; other event types show "model readout N/A — CNN assesses tornado risk
     only." Two recipient lists: `ALERT_TO` (full body) + `ALERT_TO_SMS` (~140-char body for
     email→SMS gateway). **No NWS warning in `ALLOWED_EVENTS` ⇒ no email.**
   - Dashboard's SERVICES dict already references inference + alerting; both are visible at
     `http://kappa:9007/`.
+- **Part E (2026-09-05) — DONE.** Review pass: shared `common/` package (status + NWS helpers,
+  single source of truth for KFWS coordinates and the default event allowlist), a pytest suite
+  under `tests/` run via `scripts/test.sh`, dead code removed across the repo, and a
+  post-deployment retrospective in `docs/RETROSPECTIVE.md`.
+
+## Data retention
+Training data (`data/full/`: `tensors_manifest.csv` + `tensors/*.npy` + `raw/*.png` + `wld/`)
+lives on the analysis machine only — not in this repo, not on kappa. Keep it (a few GB): exact
+reproduction of the `models/v1` eval needs the full manifest for the train/val/test split, and
+the train/serve skew test needs the raw PNGs. The ~389 GB legacy CONUS-mosaic archive predates
+the per-station IEM RIDGE approach, is superseded, and may be deleted. Live inference on kappa
+depends only on `models/v1` (which is in git) — none of the above.
 
 ## Verifying Part C without an actual tornado
 
@@ -68,15 +81,19 @@ tuning notes.
 ```
 docker-compose.yml         # unified stack (kappa); now 6 services
 services/ screenshot/ processor/ weather/ dashboard/ inference/ alerting/
+common/                     # shared package: status-file + NWS helpers (KFWS coords, default
+                             # event allowlist) — single source of truth, used by inference+alerting
+tests/                      # pytest suite; run via scripts/test.sh
+scripts/ test.sh            # test entry point
 data-tools/ collect.py iem.py run_collection.sh README.md      # Part B data collection
             (iem.py is shared with services/inference)
 ml/ preprocess.py dataset.py model.py train.py evaluate.py run_training.sh
 models/ v1/ {model.pt, manifest.json, run.json, eval.json, MANIFEST.md}  # canonical deploy
-docs/ ARCHITECTURE.md DEPLOY.md DATA.md MODEL_CARD.md
+docs/ ARCHITECTURE.md DEPLOY.md DATA.md MODEL_CARD.md RETROSPECTIVE.md
 ```
-Data (radar tensors, the ~389 GB positives archive, live captures) is **not** in the repo — it's
-bind-mounted on kappa and/or generated locally under `data/` (gitignored). Secrets live in `.env`
-(gitignored; copy from `.env.example`).
+Data is **not** in the repo: live captures/status are bind-mounted on kappa; training data lives
+only on the analysis machine under `data/` (gitignored) — see "Data retention" above. Secrets
+live in `.env` (gitignored; copy from `.env.example`).
 
 ## Key gotchas (do not relearn these)
 - **Training Python:** torch needs 3.11–3.13; default `python3` on recent Macs is 3.14. `ml/run_training.sh` auto-picks a compatible interpreter.
@@ -92,29 +109,19 @@ bind-mounted on kappa and/or generated locally under `data/` (gitignored). Secre
   Docker builds longer than that (e.g. the inference image pulling the torch CPU wheel) will appear
   to "time out" while still running on kappa. Pattern: kick off via `nohup ... > /tmp/x.log 2>&1 &`,
   then poll `tail /tmp/x.log` + `mcp__kappa__list_containers` until done.
-- **magehands docker access:** the `magehands` host user is now in the `docker` group, and
-  `/usr/bin/docker` + `/usr/bin/docker-compose` symlink into `/usr/local/bin/...` so non-interactive
-  ssh sessions (`ssh magehands@192.168.1.248 'docker ps'`) work without absolute paths. The relay is
-  still the right tool for root-required work; magehands ssh is good for `docker ps/logs/exec`.
+- **magehands docker access:** the `magehands` host user is in the `docker` group, but a
+  non-interactive ssh session gets a minimal `PATH` and `/usr/bin/docker` does **not** exist —
+  `ssh magehands@192.168.1.248 'docker ps'` fails with "command not found". Use the full path
+  (`ssh magehands@192.168.1.248 '/usr/local/bin/docker ps'`) or export
+  `PATH=/usr/local/bin:$PATH` first. The relay is still the right tool for root-required work;
+  magehands ssh (with the full path) is good for `docker ps/logs/exec`.
+- **kappa MCP relay can be down** (cert error) with magehands ssh still working. When that
+  happens, deploys can be done entirely over ssh: `/volume1/docker/reaped-whirlwind` is
+  group-writable by gid 100 (`users`), which `magehands` is in, so `tar -x` as magehands
+  succeeds there without root. Files land owned `magehands:users` instead of `1026:100` —
+  acceptable. See `docs/DEPLOY.md` for the exact ssh-only deploy sequence.
 
 ## Conventions
 - Don't commit data or secrets (`.gitignore` covers `data/`, `.env`, `.venv*/`, `ml/runs/`, weights).
 - Backend/config change on kappa → `docker-compose restart <svc>`; image/dep change → `up -d --build`.
 - The model stays *experimental*; the NWS-warning alert path (Part C) is primary and independent.
-
-## Load context frames first (snapctx)
-
-Pre-rendered project context lives in `.claude/snapctx/ctx-f*.png` — packed
-6x12 pixel-font text (`¶` = newline) holding the file tree, docs, signatures,
-and recent git log at ~2.6x fewer tokens than reading files. At session start,
-Read those frames before exploring the codebase. Rules:
-
-- Verify the `SELFTEST:` code at the top of frame 0:
-  `python3 ~/.claude/skills/loadcontext/snapctx.py verify <code> --out .claude/snapctx`
-  (on FAIL, ignore the frames and read files normally).
-- Never trust a first read of hash-like strings — grep
-  `.claude/snapctx/context.txt` or use the `zoom '<regex>' --out .claude/snapctx`
-  subcommand and Read the crop.
-- The frames are a map, not an editing source: Read real files before editing.
-- If the frames look stale (their git log ends well before HEAD), regenerate:
-  `python3 ~/.claude/skills/loadcontext/snapctx.py render .`

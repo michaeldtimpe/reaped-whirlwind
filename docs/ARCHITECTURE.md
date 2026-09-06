@@ -50,9 +50,35 @@ NWS /alerts/active ─────► alerting ──► email + SMS (SMTP) ─�
   types show "model readout N/A — CNN assesses tornado risk only." Sends via SMTP. Layered
   suppression: (a) dedupe by `alert_id` in `service-status/alerts_sent.json` (one notification per
   id, ever); (b) per-event-type rolling 24 h cap (`DAILY_CAP_SECONDS`); suppressed rows are stored
-  with `outcome=suppressed_daily_cap`; (c) global 30-min cool-off (`COOL_OFF_SECONDS`), bypassed by
+  with `outcome=suppressed_daily_cap`, and events in `DAILY_CAP_BYPASS_EVENTS` skip the cap
+  entirely (default: Tornado Warning — an outbreak's 2nd+ warning must still send);
+  (c) global 30-min cool-off (`COOL_OFF_SECONDS`), bypassed by
   events listed in `COOL_OFF_BYPASS_EVENTS` (default: just Tornado Warning so a tornado after a
-  flood is never delayed). **No NWS warning in `ALLOWED_EVENTS` ⇒ no email.**
+  flood is never delayed). The two bypass lists are independent.
+  **No NWS warning in `ALLOWED_EVENTS` ⇒ no email.**
+
+## Shared code (`common/`)
+A small dependency-light package, bind-mounted read-only into each container at `/srv/reaped/common`
+(and importable as `common` from the repo root when running locally), holding logic that used
+to be duplicated across services:
+- **Status-file helpers** — atomic JSON writes (write-to-tmp-then-rename, so the dashboard never
+  reads a half-written status file), a UTC-timestamp formatter, and a JSON-safe deep-copy. Used
+  by every service that writes to `service-status/`.
+- **NWS helpers** — the single source of truth for the KFWS lat/lon (the radar site the model is
+  trained on, and the point used for `/alerts/active`), the default severe-weather event
+  allowlist, and the `/alerts/active` fetch call itself. `weather`, `inference`, and `alerting`
+  all previously hardcoded their own copies of the KFWS coordinates; this collapses them to one
+  place.
+- **JSONL operational logging** — month-rotated, append-only, best-effort writes for the two
+  history files described under *Operational logs* below.
+
+Adding the `./common:/srv/reaped/common:ro` mount to a service in `docker-compose.yml` is a compose-file
+change — it needs `up -d` (container recreate), not `restart`. See `docs/DEPLOY.md`.
+
+## Tests (`tests/`)
+A pytest suite covering the shared `common/` helpers and per-service logic, run via
+`scripts/test.sh` (see repo root `pytest.ini` / `requirements-dev.txt` for how it's wired). Not
+part of the deployed images — this is a local/CI check, not something that runs on kappa.
 
 ## Shared host volumes (bind-mounted, not in repo)
 | Host path | Writer → Readers |
@@ -62,8 +88,32 @@ NWS /alerts/active ─────► alerting ──► email + SMS (SMTP) ─�
 | `weather-reports/` | weather → human read |
 | `service-status/` | all → dashboard; inference → alerting (the score) |
 | `radar-image-processor-logs/` | processor |
-| `inference-state/` | inference (writable; cached KFWS.wld + per-cycle PNGs) |
-| `inference-logs/`, `alerting-logs/` | per-service logs |
+| `inference-state/` | inference (writable; cached KFWS.wld + per-cycle PNGs, pruned) |
+| `inference-logs/`, `alerting-logs/` | per-service logs + the JSONL history below |
+
+## Operational logs
+The `service-status/` JSON files hold only the *latest* state, and `alerts_sent.json` is pruned to
+48 h — so neither can answer "what did the model do during that storm?" or "was that email ever
+sent?". Two append-only JSONL files, rotated monthly (`-YYYYMM`) so no file grows without bound,
+carry the durable history. Old months are never auto-pruned; deleting them is a human decision.
+Both writes are best-effort: a missing or read-only `/logs` logs one warning to stderr and the
+service keeps working — logging never breaks scoring or an email.
+
+| File | Env | One line per | Fields |
+|---|---|---|---|
+| `inference-logs/scores-YYYYMM.jsonl` | `SCORE_LOG_PATH` (`/logs/scores.jsonl`) | inference cycle, whatever the outcome | `ts`, `status`, `score` (null unless the cycle succeeded — a stale `last_score` is never re-logged as fresh), `n0b_time`, `n0s_time`, `scan_delta_seconds`, `fetch_ms`, `infer_ms`, `cycle_ms`, `error`, `error_msg`, `model_sha256`, `threshold` |
+| `alerting-logs/decisions-YYYYMM.jsonl` | `DECISION_LOG_PATH` (`/logs/decisions.jsonl`) | non-trivial alerting outcome: `sent`, `suppressed_daily_cap`, `deferred_cool_off`, `smtp_error`, `config_error`, `nws_error` | `ts`, `outcome`, `alert_id`, `event_type`, `area`, `effective`, `expires`, `model_state`, `score`, `threshold`, `reason`, `recipients_ok`, `recipients_failed`, `error` |
+
+At the 5-minute cadence the score log is ~105 KB/month. The decision log is written *in addition
+to* `alerts_sent.json` (still the 48 h dedupe set) and does not change `emails_sent_total`, which
+remains an in-memory per-process counter that resets on restart.
+
+**Retention knob.** `STATE_RETENTION_DAYS` (default `14`, `0` disables) bounds the *other*
+unbounded directory: at the end of every cycle inference unlinks `*.png` files older than that
+from `inference-state/current/`. Those PNGs are re-fetched every cycle and never re-read, so
+they exist only for post-hoc inspection; left alone the directory reached 2.5 GB / 45k files in
+101 days. The pruner is bounded to that one directory, does not recurse, never follows symlinks,
+and logs rather than raises on error.
 
 ## ML pipeline (Parts B + C)
 

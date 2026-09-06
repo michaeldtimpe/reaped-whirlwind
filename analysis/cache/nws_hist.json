@@ -1,0 +1,351 @@
+{
+    "@context": [
+        "https://geojson.org/geojson-ld/geojson-context.jsonld",
+        {
+            "@version": "1.1",
+            "wx": "https://api.weather.gov/ontology#",
+            "@vocab": "https://api.weather.gov/ontology#"
+        }
+    ],
+    "type": "FeatureCollection",
+    "features": [
+        {
+            "id": "https://api.weather.gov/alerts/urn:oid:2.49.0.1.840.0.ecdf8f18f6474b88682cd0766de8c8de02e68589.001.1",
+            "type": "Feature",
+            "geometry": null,
+            "properties": {
+                "@id": "https://api.weather.gov/alerts/urn:oid:2.49.0.1.840.0.ecdf8f18f6474b88682cd0766de8c8de02e68589.001.1",
+                "@type": "wx:Alert",
+                "id": "urn:oid:2.49.0.1.840.0.ecdf8f18f6474b88682cd0766de8c8de02e68589.001.1",
+                "areaDesc": "Montague; Cooke; Grayson; Wise; Denton; Collin; Tarrant; Dallas; Rockwall; Kaufman; Van Zandt; Rains; Johnson; Ellis; Henderson; Navarro",
+                "geocode": {
+                    "SAME": [
+                        "048337",
+                        "048097",
+                        "048181",
+                        "048497",
+                        "048121",
+                        "048085",
+                        "048439",
+                        "048113",
+                        "048397",
+                        "048257",
+                        "048467",
+                        "048379",
+                        "048251",
+                        "048139",
+                        "048213",
+                        "048349"
+                    ],
+                    "UGC": [
+                        "TXZ091",
+                        "TXZ092",
+                        "TXZ093",
+                        "TXZ102",
+                        "TXZ103",
+                        "TXZ104",
+                        "TXZ118",
+                        "TXZ119",
+                        "TXZ120",
+                        "TXZ121",
+                        "TXZ122",
+                        "TXZ123",
+                        "TXZ133",
+                        "TXZ134",
+                        "TXZ135",
+                        "TXZ146"
+                    ]
+                },
+                "affectedZones": [
+                    "https://api.weather.gov/zones/forecast/TXZ091",
+                    "https://api.weather.gov/zones/forecast/TXZ092",
+                    "https://api.weather.gov/zones/forecast/TXZ093",
+                    "https://api.weather.gov/zones/forecast/TXZ102",
+                    "https://api.weather.gov/zones/forecast/TXZ103",
+                    "https://api.weather.gov/zones/forecast/TXZ104",
+                    "https://api.weather.gov/zones/forecast/TXZ118",
+                    "https://api.weather.gov/zones/forecast/TXZ119",
+                    "https://api.weather.gov/zones/forecast/TXZ120",
+                    "https://api.weather.gov/zones/forecast/TXZ121",
+                    "https://api.weather.gov/zones/forecast/TXZ122",
+                    "https://api.weather.gov/zones/forecast/TXZ123",
+                    "https://api.weather.gov/zones/forecast/TXZ133",
+                    "https://api.weather.gov/zones/forecast/TXZ134",
+                    "https://api.weather.gov/zones/forecast/TXZ135",
+                    "https://api.weather.gov/zones/forecast/TXZ146"
+                ],
+                "references": [],
+                "sent": "2026-09-05T12:25:00-05:00",
+                "effective": "2026-09-05T12:25:00-05:00",
+                "onset": "2026-09-06T12:00:00-05:00",
+                "expires": "2026-09-06T00:30:00-05:00",
+                "ends": "2026-09-06T20:00:00-05:00",
+                "status": "Actual",
+                "messageType": "Alert",
+                "category": "Met",
+                "severity": "Moderate",
+                "certainty": "Likely",
+                "urgency": "Expected",
+                "event": "Heat Advisory",
+                "sender": "w-nws.webmaster@noaa.gov",
+                "senderName": "NWS Fort Worth TX",
+                "headline": "Heat Advisory issued September 5 at 12:25PM CDT until September 6 at 8:00PM CDT by NWS Fort Worth TX",
+                "description": "* WHAT...Heat index values up to 108 expected.\n\n* WHERE...Portions of North Texas\n\n* WHEN...From noon to 8 PM CDT Sunday.\n\n* IMPACTS...Hot temperatures and high humidity will increase the risk\nfor heat-related illnesses to occur, particularly for those working\nor participating in outdoor activities.",
+                "instruction": "Take extra precautions when outside by staying hydrated, wearing\nlightweight and loose fitting clothing, and limiting strenuous\nactivities to the early morning or evening. Check up on relatives and\nneighbors. Never leave young children or pets in an enclosed vehicle,\neven for a short time, as temperatures can quickly rise to\nlife-threatening levels.\n\nKnow the signs and symptoms of heat exhaustion and heat stroke. To\nreduce risk when outdoors, the occupational safety and health\nadministration recommends scheduling frequent rest breaks in shaded\nor air conditioned environments. Anyone overcome by heat should be\nmoved to a cool and shaded location. Heat stroke is an emergency!\nCall 911 ASAP if you or someone you know is exhibiting signs of heat\nstroke.",
+                "response": "Execute",
+                "note": null,
+                "parameters": {
+                    "AWIPSidentifier": [
+                        "NPWFWD"
+                    ],
+                    "WMOidentifier": [
+                        "WWUS74 KFWD 051725"
+                    ],
+                    "NWSheadline": [
+                        "HEAT ADVISORY IN EFFECT FROM NOON TO 8 PM CDT SUNDAY"
+                    ],
+                    "BLOCKCHANNEL": [
+                        "EAS",
+                        "NWEM",
+                        "CMAS"
+                    ],
+                    "VTEC": [
+                        "/O.NEW.KFWD.HT.Y.0031.260906T1700Z-260907T0100Z/"
+                    ],
+                    "eventEndingTime": [
+                        "2026-09-06T20:00:00-05:00"
+                    ]
+                },
+                "scope": "Public",
+                "code": "IPAWSv1.0",
+                "language": "en-US",
+                "web": "http://www.weather.gov",
+                "eventCode": {
+                    "SAME": [
+                        "NWS"
+                    ],
+                    "NationalWeatherService": [
+                        "HTY"
+                    ]
+                }
+            }
+        },
+        {
+            "id": "https://api.weather.gov/alerts/urn:oid:2.49.0.1.840.0.3a74229540e1fd0a54e4cdac8e65c32c4019a9e7.001.1",
+            "type": "Feature",
+            "geometry": null,
+            "properties": {
+                "@id": "https://api.weather.gov/alerts/urn:oid:2.49.0.1.840.0.3a74229540e1fd0a54e4cdac8e65c32c4019a9e7.001.1",
+                "@type": "wx:Alert",
+                "id": "urn:oid:2.49.0.1.840.0.3a74229540e1fd0a54e4cdac8e65c32c4019a9e7.001.1",
+                "areaDesc": "Wise; Denton; Collin; Hunt; Parker; Tarrant; Dallas; Rockwall; Kaufman; Hood; Johnson; Ellis; Henderson",
+                "geocode": {
+                    "SAME": [
+                        "048497",
+                        "048121",
+                        "048085",
+                        "048231",
+                        "048367",
+                        "048439",
+                        "048113",
+                        "048397",
+                        "048257",
+                        "048221",
+                        "048251",
+                        "048139",
+                        "048213"
+                    ],
+                    "UGC": [
+                        "TXZ102",
+                        "TXZ103",
+                        "TXZ104",
+                        "TXZ105",
+                        "TXZ117",
+                        "TXZ118",
+                        "TXZ119",
+                        "TXZ120",
+                        "TXZ121",
+                        "TXZ131",
+                        "TXZ133",
+                        "TXZ134",
+                        "TXZ135"
+                    ]
+                },
+                "affectedZones": [
+                    "https://api.weather.gov/zones/forecast/TXZ102",
+                    "https://api.weather.gov/zones/forecast/TXZ103",
+                    "https://api.weather.gov/zones/forecast/TXZ104",
+                    "https://api.weather.gov/zones/forecast/TXZ105",
+                    "https://api.weather.gov/zones/forecast/TXZ117",
+                    "https://api.weather.gov/zones/forecast/TXZ118",
+                    "https://api.weather.gov/zones/forecast/TXZ119",
+                    "https://api.weather.gov/zones/forecast/TXZ120",
+                    "https://api.weather.gov/zones/forecast/TXZ121",
+                    "https://api.weather.gov/zones/forecast/TXZ131",
+                    "https://api.weather.gov/zones/forecast/TXZ133",
+                    "https://api.weather.gov/zones/forecast/TXZ134",
+                    "https://api.weather.gov/zones/forecast/TXZ135"
+                ],
+                "references": [],
+                "sent": "2026-08-31T15:45:00-05:00",
+                "effective": "2026-08-31T15:45:00-05:00",
+                "onset": "2026-08-31T15:45:00-05:00",
+                "expires": "2026-09-01T18:45:00-05:00",
+                "ends": null,
+                "status": "Actual",
+                "messageType": "Alert",
+                "category": "Met",
+                "severity": "Unknown",
+                "certainty": "Unknown",
+                "urgency": "Unknown",
+                "event": "Air Quality Alert",
+                "sender": "w-nws.webmaster@noaa.gov",
+                "senderName": "NWS Fort Worth TX",
+                "headline": "Air Quality Alert issued August 31 at 3:45PM CDT by NWS Fort Worth TX",
+                "description": "AQAFWD\n\nThe Texas Commission on Environmental Quality (TCEQ) has issued\nan Ozone Action Day for the Dallas-Fort Worth area for Tuesday,\nSeptember 1, 2026.\n\nAtmospheric conditions are expected to be favorable for producing\nhigh levels of ozone air pollution in the Dallas-Fort Worth area\non Tuesday. You can help prevent ozone pollution by sharing a\nride, walking, riding a bicycle, taking your lunch to work,\navoiding drive-through lanes, conserving energy, and keeping your\nvehicle properly tuned.\n\nFor more information on ozone:\n\nOzone: The Facts (www.tceq.texas.gov/goto/ozonefacts)\n\nAir North Texas: (www.airnorthtexas.org)\n\nEPA Air Now\n(www.airnow.gov/index.cfm?action.local_state&STATEID=45&TAB=0)\n\nTake care of Texas (www.takecareoftexas.org)\n\nNorth Central Texas Council of Governments Air Quality\n(www.nctcog.org/trans/air/index.asp)",
+                "instruction": null,
+                "response": "Monitor",
+                "note": "Non-Weather Emergency Message. Not sent to IPAWS.",
+                "parameters": {
+                    "AWIPSidentifier": [
+                        "AQAFWD"
+                    ],
+                    "WMOidentifier": [
+                        "AEUS74 KFWD 312045"
+                    ],
+                    "NWSheadline": [
+                        "OZONE ACTION DAY"
+                    ],
+                    "BLOCKCHANNEL": [
+                        "EAS",
+                        "NWEM",
+                        "CMAS"
+                    ]
+                },
+                "scope": "Public",
+                "code": "IPAWSv1.0",
+                "language": "en-US",
+                "web": "http://www.weather.gov",
+                "eventCode": {
+                    "SAME": [
+                        "NWS"
+                    ],
+                    "NationalWeatherService": [
+                        "AQA"
+                    ]
+                }
+            }
+        },
+        {
+            "id": "https://api.weather.gov/alerts/urn:oid:2.49.0.1.840.0.09ae07099323ddc2cb5ff0f36ac0801b1e1213e0.001.1",
+            "type": "Feature",
+            "geometry": null,
+            "properties": {
+                "@id": "https://api.weather.gov/alerts/urn:oid:2.49.0.1.840.0.09ae07099323ddc2cb5ff0f36ac0801b1e1213e0.001.1",
+                "@type": "wx:Alert",
+                "id": "urn:oid:2.49.0.1.840.0.09ae07099323ddc2cb5ff0f36ac0801b1e1213e0.001.1",
+                "areaDesc": "Wise; Denton; Collin; Hunt; Parker; Tarrant; Dallas; Rockwall; Kaufman; Hood; Johnson; Ellis; Henderson",
+                "geocode": {
+                    "SAME": [
+                        "048497",
+                        "048121",
+                        "048085",
+                        "048231",
+                        "048367",
+                        "048439",
+                        "048113",
+                        "048397",
+                        "048257",
+                        "048221",
+                        "048251",
+                        "048139",
+                        "048213"
+                    ],
+                    "UGC": [
+                        "TXZ102",
+                        "TXZ103",
+                        "TXZ104",
+                        "TXZ105",
+                        "TXZ117",
+                        "TXZ118",
+                        "TXZ119",
+                        "TXZ120",
+                        "TXZ121",
+                        "TXZ131",
+                        "TXZ133",
+                        "TXZ134",
+                        "TXZ135"
+                    ]
+                },
+                "affectedZones": [
+                    "https://api.weather.gov/zones/forecast/TXZ102",
+                    "https://api.weather.gov/zones/forecast/TXZ103",
+                    "https://api.weather.gov/zones/forecast/TXZ104",
+                    "https://api.weather.gov/zones/forecast/TXZ105",
+                    "https://api.weather.gov/zones/forecast/TXZ117",
+                    "https://api.weather.gov/zones/forecast/TXZ118",
+                    "https://api.weather.gov/zones/forecast/TXZ119",
+                    "https://api.weather.gov/zones/forecast/TXZ120",
+                    "https://api.weather.gov/zones/forecast/TXZ121",
+                    "https://api.weather.gov/zones/forecast/TXZ131",
+                    "https://api.weather.gov/zones/forecast/TXZ133",
+                    "https://api.weather.gov/zones/forecast/TXZ134",
+                    "https://api.weather.gov/zones/forecast/TXZ135"
+                ],
+                "references": [],
+                "sent": "2026-08-30T12:38:00-05:00",
+                "effective": "2026-08-30T12:38:00-05:00",
+                "onset": "2026-08-30T12:38:00-05:00",
+                "expires": "2026-08-31T15:45:00-05:00",
+                "ends": null,
+                "status": "Actual",
+                "messageType": "Alert",
+                "category": "Met",
+                "severity": "Unknown",
+                "certainty": "Unknown",
+                "urgency": "Unknown",
+                "event": "Air Quality Alert",
+                "sender": "w-nws.webmaster@noaa.gov",
+                "senderName": "NWS Fort Worth TX",
+                "headline": "Air Quality Alert issued August 30 at 12:38PM CDT by NWS Fort Worth TX",
+                "description": "AQAFWD\n\nThe Texas Commission on Environmental Quality (TCEQ) has issued\nan Ozone Action Day for the Dallas-Fort Worth area for Monday,\nAugust 31, 2026.\n\nAtmospheric conditions are expected to be favorable for producing\nhigh levels of ozone air pollution in the Dallas-Fort Worth area\non Monday. You can help prevent ozone pollution by sharing a\nride, walking, riding a bicycle, taking your lunch to work,\navoiding drive-through lanes, conserving energy, and keeping your\nvehicle properly tuned.\n\nFor more information on ozone:\n\nOzone: The Facts (www.tceq.texas.gov/goto/ozonefacts)\n\nAir North Texas: (www.airnorthtexas.org)\n\nEPA Air Now\n(www.airnow.gov/index.cfm?action.local_state&STATEID=45&TAB=0)\n\nTake care of Texas (www.takecareoftexas.org)\n\nNorth Central Texas Council of Governments Air Quality\n(www.nctcog.org/trans/air/index.asp)",
+                "instruction": null,
+                "response": "Monitor",
+                "note": "Non-Weather Emergency Message. Not sent to IPAWS.",
+                "parameters": {
+                    "AWIPSidentifier": [
+                        "AQAFWD"
+                    ],
+                    "WMOidentifier": [
+                        "AEUS74 KFWD 301738"
+                    ],
+                    "NWSheadline": [
+                        "OZONE ACTION DAY"
+                    ],
+                    "BLOCKCHANNEL": [
+                        "EAS",
+                        "NWEM",
+                        "CMAS"
+                    ]
+                },
+                "scope": "Public",
+                "code": "IPAWSv1.0",
+                "language": "en-US",
+                "web": "http://www.weather.gov",
+                "eventCode": {
+                    "SAME": [
+                        "NWS"
+                    ],
+                    "NationalWeatherService": [
+                        "AQA"
+                    ]
+                }
+            }
+        }
+    ],
+    "title": "Watches, warnings, and advisories issued between Wed, May 27, 2026 12:00:00 AM +0000 and Sun, Sep 6, 2026 12:00:00 AM +0000 for 32.5728 N, 97.3031 W",
+    "updated": "2026-09-05T17:26:36+00:00",
+    "pagination": {
+        "next": "https://api.weather.gov/alerts?point=32.5728,-97.3031&start=2026-05-27T00:00:00Z&end=2026-09-06T00:00:00Z&limit=500&cursor=eyJ0IjoxNzg4MTExNDgwLCJpIjoidXJuOm9pZDoyLjQ5LjAuMS44NDAuMC4wOWFlMDcwOTkzMjNkZGMyY2I1ZmYwZjM2YWMwODAxYjFlMTIxM2UwLjAwMS4xIn0%3D"
+    }
+}

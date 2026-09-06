@@ -12,7 +12,10 @@ Every POLL_INTERVAL seconds:
        b. Daily cap: at most one notification per event_type per
           DAILY_CAP_SECONDS (rolling 24 h by default). Suppressed alerts
           ARE written to the ledger with outcome="suppressed_daily_cap"
-          so we don't re-evaluate them every cycle.
+          so we don't re-evaluate them every cycle. Events in
+          DAILY_CAP_BYPASS_EVENTS (default: "Tornado Warning") skip this
+          check entirely — an outbreak's 2nd and later tornado warnings
+          must never be swallowed by a 24 h cap.
        c. Global cool-off: at most one notification per COOL_OFF_SECONDS
           (30 min by default) across all event_types. Events in
           COOL_OFF_BYPASS_EVENTS (default: "Tornado Warning") skip this
@@ -24,6 +27,9 @@ Every POLL_INTERVAL seconds:
      numeric annotation. For non-tornado events the model readout is
      suppressed ("N/A — model assesses tornado risk only").
   5. Send via SMTP. Per-cycle hard cap of 5; deferred alerts retry next cycle.
+  6. Append every non-trivial outcome to DECISION_LOG_PATH (month-rotated
+     JSONL). alerts_sent.json is pruned to 48 h, so that ledger cannot answer
+     "was this email ever sent?" — the decision log can.
 
 CLI:
   python alert_service.py                                # service loop
@@ -33,25 +39,45 @@ CLI:
 
 The model NEVER originates a notification. No active alert in ALLOWED_EVENTS
 ⇒ no email.
+
+TESTING SEAM
+  `decide_alert()` is the whole suppression policy as one pure function: it
+  takes the alert props, the ledger rows, the set of already-handled alert_ids
+  and an explicit `now`, and returns a Decision — no SMTP, no network, no
+  clock, no file I/O. `run_cycle()` does nothing but execute that decision
+  (record an error, append a ledger row, or send). Every knob is an optional
+  keyword argument defaulting to the module-level env-derived value, so
+  `tests/test_alert_suppression.py` can vary caps and windows without touching
+  the environment. Behaviour is identical to the inline version this replaced.
 """
 import argparse, json, os, smtplib, ssl, sys, threading, time
 from datetime import datetime, timezone, timedelta
 from email.mime.text import MIMEText
 from pathlib import Path
+from typing import NamedTuple, Optional
 
-import requests
 from flask import Flask, jsonify
+
+# Shared helpers are bind-mounted at /srv/reaped/common in the container (see
+# docker-compose.yml); outside it they resolve relative to this file.
+# `common` is a package, so its PARENT goes on the path.
+sys.path.insert(0, "/srv/reaped" if Path("/srv/reaped/common").is_dir()
+                else str(Path(__file__).resolve().parents[2]))
+from common import nws
+from common.jsonlog import append_jsonl
+from common.status import atomic_write_json, deep_copy_json, utc_iso
 
 # ---- config from env (see docker-compose.yml) --------------------------------
 PORT              = int(os.environ.get("PORT", "9009"))
 POLL_INTERVAL     = int(os.environ.get("POLL_INTERVAL", "300"))     # 5 min
 MAX_SCORE_AGE     = int(os.environ.get("MAX_SCORE_AGE_SECONDS", "1800"))
-KFWS_LAT          = float(os.environ.get("KFWS_LAT",  "32.5728"))
-KFWS_LON          = float(os.environ.get("KFWS_LON", "-97.3031"))
-NWS_UA            = os.environ.get("NWS_UA", "reaped-whirlwind/0.1 (alerting)")
+KFWS_LAT          = float(os.environ.get("KFWS_LAT",  str(nws.KFWS_LAT)))
+KFWS_LON          = float(os.environ.get("KFWS_LON", str(nws.KFWS_LON)))
+NWS_UA            = os.environ.get("NWS_UA", nws.NWS_USER_AGENT)
 THRESHOLD         = float(os.environ.get("MODEL_RISK_THRESHOLD", "0.8"))
 
 INFERENCE_STATUS  = Path(os.environ.get("INFERENCE_STATUS_PATH", "/status/inference_status.json"))
+DECISION_LOG_PATH = Path(os.environ.get("DECISION_LOG_PATH", "/logs/decisions.jsonl"))
 ALERTS_SENT_PATH  = Path(os.environ.get("ALERTS_SENT_PATH", "/status/alerts_sent.json"))
 STATUS_PATH       = Path(os.environ.get("STATUS_PATH", "/status/alerting_status.json"))
 
@@ -69,29 +95,25 @@ def _split_csv(s):
 ALERT_TO_FULL = _split_csv(os.environ.get("ALERT_TO", ""))
 ALERT_TO_SMS  = _split_csv(os.environ.get("ALERT_TO_SMS", ""))
 
-# Event allowlist. Default = the eight standard severe-weather Warnings most
-# relevant in DFW. Watches and advisories are excluded by default — the user
-# can opt in by extending ALLOWED_EVENTS in .env. Each entry is the literal
-# NWS `properties.event` string.
-DEFAULT_ALLOWED_EVENTS = ",".join([
-    "Tornado Warning",
-    "Severe Thunderstorm Warning",
-    "Flash Flood Warning",
-    "Flood Warning",
-    "High Wind Warning",
-    "Winter Storm Warning",
-    "Ice Storm Warning",
-    "Extreme Wind Warning",
-])
+# Event allowlist. The default (the eight standard severe-weather Warnings most
+# relevant in DFW) is canonical in common/nws.py; watches and advisories are
+# excluded by default — the user can opt in by extending ALLOWED_EVENTS in .env.
+# Each entry is the literal NWS `properties.event` string.
+DEFAULT_ALLOWED_EVENTS = ",".join(nws.DEFAULT_ALLOWED_EVENTS)
 ALLOWED_EVENTS = set(_split_csv(os.environ.get("ALLOWED_EVENTS", DEFAULT_ALLOWED_EVENTS)))
 
 # Rate-limit knobs.
 #   DAILY_CAP_SECONDS:  per-event-type rolling-window cap. 86400 = 24 h.
 #   COOL_OFF_SECONDS:   global throttle across all event types. 1800 = 30 min.
-#   COOL_OFF_BYPASS_EVENTS: events that skip cool-off (still respect daily cap).
-DAILY_CAP_SECONDS      = int(os.environ.get("DAILY_CAP_SECONDS", "86400"))
-COOL_OFF_SECONDS       = int(os.environ.get("COOL_OFF_SECONDS", "1800"))
-COOL_OFF_BYPASS_EVENTS = set(_split_csv(os.environ.get("COOL_OFF_BYPASS_EVENTS", "Tornado Warning")))
+#   DAILY_CAP_BYPASS_EVENTS: events that skip the daily cap entirely.
+#   COOL_OFF_BYPASS_EVENTS:  events that skip the global cool-off.
+# The two bypass lists are independent: an event may skip one, both or neither.
+# Tornado Warning is in both by default — a DFW outbreak issues several sequential
+# tornado warnings for one point and #2 onward must still reach the phone.
+DAILY_CAP_SECONDS       = int(os.environ.get("DAILY_CAP_SECONDS", "86400"))
+COOL_OFF_SECONDS        = int(os.environ.get("COOL_OFF_SECONDS", "1800"))
+DAILY_CAP_BYPASS_EVENTS = set(_split_csv(os.environ.get("DAILY_CAP_BYPASS_EVENTS", "Tornado Warning")))
+COOL_OFF_BYPASS_EVENTS  = set(_split_csv(os.environ.get("COOL_OFF_BYPASS_EVENTS", "Tornado Warning")))
 
 # Compact NWS-style abbreviations for SMS subjects.
 EVENT_ABBREV = {
@@ -105,7 +127,6 @@ EVENT_ABBREV = {
     "Extreme Wind Warning":        "EWW",
 }
 
-NWS_ALERTS_URL      = f"https://api.weather.gov/alerts/active?point={KFWS_LAT},{KFWS_LON}"
 PER_CYCLE_EMAIL_CAP = 5
 LEDGER_PRUNE_HOURS  = 48   # keep slightly past DAILY_CAP_SECONDS so the per-type lookback always has data
 
@@ -113,14 +134,7 @@ FIXTURE_DIR = Path(__file__).parent / "fixtures"
 
 
 # ---- helpers -----------------------------------------------------------------
-def utc_iso(dt=None):
-    if dt is None:
-        dt = datetime.now(timezone.utc)
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
+# utc_iso / atomic_write_json / deep_copy_json come from common.status.
 def parse_iso(s):
     if not s:
         return None
@@ -133,16 +147,6 @@ def parse_iso(s):
         return None
 
 
-def atomic_write_json(path: Path, obj):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    with open(tmp, "w") as f:
-        json.dump(obj, f, indent=2)
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(tmp, path)
-
-
 def event_abbrev(event_type: str) -> str:
     """Compact code for SMS subject. Falls back to first letters of each word."""
     if event_type in EVENT_ABBREV:
@@ -152,20 +156,15 @@ def event_abbrev(event_type: str) -> str:
 
 # ---- NWS fetch + filter ------------------------------------------------------
 def fetch_nws_alerts():
-    """Raises on HTTP error. Returns the raw GeoJSON FeatureCollection."""
-    r = requests.get(
-        NWS_ALERTS_URL,
-        headers={"User-Agent": NWS_UA, "Accept": "application/geo+json"},
-        timeout=10,
-    )
-    r.raise_for_status()
-    return r.json()
+    """Raises on HTTP error (run_cycle counts it as a 'nws' error and sets
+    status 'nws_error'). Returns the GeoJSON `features` list."""
+    return nws.fetch_active_alerts(KFWS_LAT, KFWS_LON, user_agent=NWS_UA, timeout=10)
 
 
-def filter_to_allowed_events(geojson, now):
+def filter_to_allowed_events(features, now):
     """Active alerts whose `event` is in ALLOWED_EVENTS and not yet expired."""
     out = []
-    for feat in geojson.get("features", []) or []:
+    for feat in features or []:
         props = feat.get("properties", {}) or {}
         if props.get("event") not in ALLOWED_EVENTS:
             continue
@@ -229,6 +228,77 @@ def latest_sent_at(ledger, now, window_seconds):
         if sent and sent >= cutoff and (latest is None or sent > latest):
             latest = sent
     return latest
+
+
+# ---- suppression policy (pure; see "TESTING SEAM" in the module docstring) ---
+SEND               = "send"
+SKIP_NO_ID         = "skip_no_id"
+SKIP_DUPLICATE     = "skip_duplicate"
+SKIP_NOT_ALLOWED   = "skip_not_allowed"
+DEFER_CYCLE_CAP    = "defer_cycle_cap"
+SUPPRESS_DAILY_CAP = "suppress_daily_cap"
+DEFER_COOL_OFF     = "defer_cool_off"
+
+
+class Decision(NamedTuple):
+    action: str
+    reason: str = ""
+    cool_off_until: Optional[datetime] = None
+
+
+def decide_alert(props, ledger, sent_ids, now, *, sent_this_cycle=0,
+                 allowed_events=None, per_cycle_cap=None, daily_cap_seconds=None,
+                 daily_cap_bypass_events=None, cool_off_seconds=None,
+                 cool_off_bypass_events=None) -> Decision:
+    """Decide what to do with ONE active alert. Pure: no I/O, no clock, no SMTP.
+
+    Layers, in the order run_cycle applies them:
+      1. no alert_id, or alert_id already in `sent_ids`  -> skip silently
+      2. event not in the allowlist                      -> skip (belt-and-braces;
+         filter_to_allowed_events has already dropped these)
+      3. per-cycle email cap reached                      -> defer to next cycle
+      4. per-event-type rolling cap (DAILY_CAP_SECONDS), unless the event type
+         is in DAILY_CAP_BYPASS_EVENTS                    -> suppress + ledger row
+      5. global cool-off (COOL_OFF_SECONDS), unless the event type is in
+         COOL_OFF_BYPASS_EVENTS                           -> defer, no ledger row
+
+    The two bypass sets are independent; membership in one says nothing about
+    the other.
+      6. otherwise                                        -> send
+    """
+    allowed_events         = ALLOWED_EVENTS if allowed_events is None else allowed_events
+    per_cycle_cap          = PER_CYCLE_EMAIL_CAP if per_cycle_cap is None else per_cycle_cap
+    daily_cap_seconds      = DAILY_CAP_SECONDS if daily_cap_seconds is None else daily_cap_seconds
+    cool_off_seconds       = COOL_OFF_SECONDS if cool_off_seconds is None else cool_off_seconds
+    daily_cap_bypass_events = (DAILY_CAP_BYPASS_EVENTS if daily_cap_bypass_events is None
+                               else daily_cap_bypass_events)
+    cool_off_bypass_events = (COOL_OFF_BYPASS_EVENTS if cool_off_bypass_events is None
+                              else cool_off_bypass_events)
+
+    alert_id   = props.get("id")
+    event_type = props.get("event")
+
+    if not alert_id:
+        return Decision(SKIP_NO_ID, "no alert id")
+    if alert_id in sent_ids:
+        return Decision(SKIP_DUPLICATE, "alert_id already handled")
+    if event_type not in allowed_events:
+        return Decision(SKIP_NOT_ALLOWED, f"{event_type!r} not in ALLOWED_EVENTS")
+    if sent_this_cycle >= per_cycle_cap:
+        return Decision(DEFER_CYCLE_CAP, f"per-cycle cap {per_cycle_cap} reached")
+
+    if event_type not in daily_cap_bypass_events:
+        recent_hit, recent_at = has_recent_send_of_type(ledger, event_type, now, daily_cap_seconds)
+        if recent_hit:
+            return Decision(SUPPRESS_DAILY_CAP, f"daily cap: last sent {utc_iso(recent_at)}")
+
+    if event_type not in cool_off_bypass_events:
+        co_last = latest_sent_at(ledger, now, cool_off_seconds)
+        if co_last is not None:
+            until = co_last + timedelta(seconds=cool_off_seconds)
+            return Decision(DEFER_COOL_OFF, f"cool_off until {utc_iso(until)}", until)
+
+    return Decision(SEND)
 
 
 # ---- email composition (mechanical/numeric language only) --------------------
@@ -385,6 +455,32 @@ def save_ledger(rows, now):
     return kept
 
 
+# ---- decision log ------------------------------------------------------------
+def log_decision(outcome, now, *, props=None, event_type=None, model_state=None,
+                 score=None, threshold=None, reason=None, recipients_ok=None,
+                 recipients_failed=None, error=None):
+    """Append one decision to DECISION_LOG_PATH (month-rotated). Durable history:
+    alerts_sent.json is pruned to LEDGER_PRUNE_HOURS, so it can never answer
+    "was this email ever sent?". Never raises; never affects emails_sent_total."""
+    props = props or {}
+    append_jsonl(DECISION_LOG_PATH, {
+        "ts":                utc_iso(now),
+        "outcome":           outcome,
+        "alert_id":          props.get("id"),
+        "event_type":        event_type or props.get("event"),
+        "area":              props.get("areaDesc"),
+        "effective":         props.get("effective"),
+        "expires":           props.get("expires"),
+        "model_state":       model_state,
+        "score":             score,
+        "threshold":         threshold,
+        "reason":            reason,
+        "recipients_ok":     recipients_ok or [],
+        "recipients_failed": recipients_failed or [],
+        "error":             error,
+    })
+
+
 # ---- service state -----------------------------------------------------------
 class State:
     def __init__(self):
@@ -405,6 +501,7 @@ class State:
             "model_state_last_email": None,
             "cool_off_until": None,
             "allowed_events": sorted(ALLOWED_EVENTS),
+            "daily_cap_bypass_events": sorted(DAILY_CAP_BYPASS_EVENTS),
             "cool_off_bypass_events": sorted(COOL_OFF_BYPASS_EVENTS),
             "cool_off_seconds": COOL_OFF_SECONDS,
             "daily_cap_seconds": DAILY_CAP_SECONDS,
@@ -419,7 +516,7 @@ class State:
 
     def snapshot(self):
         with self.lock:
-            return json.loads(json.dumps(self.last_status))
+            return deep_copy_json(self.last_status)
 
     def commit(self, status):
         with self.lock:
@@ -431,16 +528,17 @@ class State:
 def run_cycle(state: State) -> dict:
     now = datetime.now(timezone.utc)
     try:
-        geojson = fetch_nws_alerts()
+        features = fetch_nws_alerts()
     except Exception as e:
         state.record_error("nws", f"{type(e).__name__}: {e}")
+        log_decision("nws_error", now, error=f"{type(e).__name__}: {e}")
         status = state.snapshot()
         status["status"] = "nws_error"
         status["last_poll_time"] = utc_iso(now)
         state.commit(status)
         return status
 
-    active = filter_to_allowed_events(geojson, now)
+    active = filter_to_allowed_events(features, now)
     infer = load_inference_status()
     model_state, score, thr, score_age = classify_model_state(infer, now)
     scan_delta = (infer or {}).get("scan_delta_seconds")
@@ -461,15 +559,18 @@ def run_cycle(state: State) -> dict:
     for props in active:
         alert_id   = props.get("id")
         event_type = props.get("event")
-        if not alert_id or alert_id in sent_ids:
+        decision = decide_alert(props, ledger, sent_ids, now, sent_this_cycle=sent_this_cycle)
+
+        if decision.action in (SKIP_NO_ID, SKIP_DUPLICATE, SKIP_NOT_ALLOWED):
             continue
-        if sent_this_cycle >= PER_CYCLE_EMAIL_CAP:
+
+        if decision.action == DEFER_CYCLE_CAP:
             state.record_error("cap", f"deferred alert_id={alert_id} (cap={PER_CYCLE_EMAIL_CAP})")
             continue
 
-        # (b) per-type daily cap — already sent this type recently?
-        recent_hit, recent_at = has_recent_send_of_type(ledger, event_type, now, DAILY_CAP_SECONDS)
-        if recent_hit:
+        # (b) per-type daily cap — suppressed rows ARE written to the ledger so we
+        # don't re-evaluate this alert_id every cycle.
+        if decision.action == SUPPRESS_DAILY_CAP:
             ledger.append({
                 "alert_id":         alert_id,
                 "event_type":       event_type,
@@ -480,23 +581,25 @@ def run_cycle(state: State) -> dict:
                 "threshold":        thr,
                 "recipients_ok":    [],
                 "recipients_failed": [],
-                "reason":           f"daily cap: last sent {utc_iso(recent_at)}",
+                "reason":           decision.reason,
             })
+            log_decision("suppressed_daily_cap", now, props=props, event_type=event_type,
+                         model_state=model_state, score=score, threshold=thr,
+                         reason=decision.reason)
             sent_ids.add(alert_id)
             suppressed_daily += 1
             continue
 
-        # (c) global cool-off, unless event bypasses
-        if event_type not in COOL_OFF_BYPASS_EVENTS:
-            co_last = latest_sent_at(ledger, now, COOL_OFF_SECONDS)
-            if co_last is not None:
-                # Defer — NOT written to ledger; retry next cycle when cool-off elapses.
-                until = co_last + timedelta(seconds=COOL_OFF_SECONDS)
-                state.record_error("cool_off",
-                                   f"deferred alert_id={alert_id} ({event_type}); "
-                                   f"cool_off until {utc_iso(until)}")
-                deferred_cool_off += 1
-                continue
+        # (c) global cool-off — NOT written to the ledger; retries next cycle.
+        if decision.action == DEFER_COOL_OFF:
+            state.record_error("cool_off",
+                               f"deferred alert_id={alert_id} ({event_type}); "
+                               f"{decision.reason}")
+            log_decision("deferred_cool_off", now, props=props, event_type=event_type,
+                         model_state=model_state, score=score, threshold=thr,
+                         reason=decision.reason)
+            deferred_cool_off += 1
+            continue
 
         # Send.
         full_subj, full_body = compose_email(props, event_type, model_state, score, thr, score_age, scan_delta)
@@ -505,6 +608,8 @@ def run_cycle(state: State) -> dict:
                     + [(r, sms_subj, sms_body) for r in ALERT_TO_SMS])
         if not messages:
             state.record_error("config", "no ALERT_TO / ALERT_TO_SMS recipients configured")
+            log_decision("config_error", now, props=props, event_type=event_type,
+                         error="no ALERT_TO / ALERT_TO_SMS recipients configured")
             new_status = "smtp_error"
             continue
         results = smtp_send_many(messages)
@@ -512,6 +617,10 @@ def run_cycle(state: State) -> dict:
         failed = [(r, e) for r, e in results if e is not None]
         if not any_ok:
             state.record_error("smtp", f"alert_id={alert_id}: all sends failed: {failed}")
+            log_decision("smtp_error", now, props=props, event_type=event_type,
+                         model_state=model_state, score=score, threshold=thr,
+                         recipients_failed=[{"to": r, "err": e} for r, e in failed],
+                         error="all sends failed")
             new_status = "smtp_error"
             continue
         if failed:
@@ -529,6 +638,10 @@ def run_cycle(state: State) -> dict:
             "recipients_ok":    [r for r, e in results if e is None],
             "recipients_failed": [{"to": r, "err": e} for r, e in failed],
         })
+        log_decision("sent", now, props=props, event_type=event_type,
+                     model_state=model_state, score=score, threshold=thr,
+                     recipients_ok=[r for r, e in results if e is None],
+                     recipients_failed=[{"to": r, "err": e} for r, e in failed])
         sent_ids.add(alert_id)
         sent_this_cycle += 1
         last_id, last_time, last_state, last_event_type = alert_id, utc_iso(now), model_state, event_type

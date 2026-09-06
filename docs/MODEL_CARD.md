@@ -100,6 +100,11 @@ Recommendation: leave at 0.8 for the first season, observe the annotations again
 (via the dashboard + the per-email scores logged in `alerts_sent.json`), then re-tune from
 evidence.
 
+## Post-deployment evaluation
+
+See `docs/RETROSPECTIVE.md` for how the model and the NWS-gated alerting design have held up
+against live operation on kappa.
+
 ## Going forward (not part of Part C)
 
 The eval supports two cheap follow-ups before any retrain:

@@ -43,3 +43,24 @@ the same mesocyclone can't appear in both train and test (`ml/dataset.py`).
 - N0S velocity is coarse (16 levels, ~7-min cadence).
 - Data is collected **sequence-ready** (per-event ordered frames) so a temporal model needs no
   re-collection.
+
+## Retention policy
+- **Keep** (analysis machine only, not this repo, not kappa): `data/full/tensors_manifest.csv` +
+  `data/full/tensors/*.npy` + `data/full/raw/*.png` + `data/full/wld/`. A few GB total. Exact
+  reproduction of the `models/v1` eval needs the full manifest for the leakage-safe
+  (date, station) split, and the train/serve skew regression
+  (`services/inference/test_tensor_equiv.py`) needs the raw PNGs to re-decode against.
+- **Superseded, may be deleted**: the ~389 GB legacy CONUS-mosaic tornado-positives archive
+  (`weather-screenshots/postive-tornado-images-11-mar-2026/` on kappa) — it predates the
+  per-station IEM RIDGE collection above and nothing in the current pipeline reads it.
+- **Live inference depends on none of the above** — only `models/v1/` (model.pt + manifest.json),
+  which is tracked in git.
+- **Re-collection is possible but not bit-identical.** Re-running `data-tools/run_collection.sh`
+  against public sources (IEM RIDGE archive, SPC CSVs, IEM watchwarn) takes hours and a few GB of
+  bandwidth, but won't reproduce the exact same manifest: the nearest-station list is fetched
+  live from IEM's current `NEXRAD.geojson`, and the SPC tornado CSV URL has the end-year baked
+  into it (`data-tools/collect.py`) — it will need bumping for anything collected after 2025.
+- **Minimum to re-run eval**: the full `tensors_manifest.csv` + every `tensors/*.npy` it
+  references.
+- **Minimum to retrain from scratch**: the above, plus `manifest.csv`, `raw/*.png`, and `wld/`
+  (so preprocessing can be redone or audited, not just replayed from cached tensors).
