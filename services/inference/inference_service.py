@@ -21,7 +21,7 @@ CLI:
   python inference_service.py                # service loop (Flask /health + bg poll)
   python inference_service.py --once         # one synchronous cycle, JSON to stdout, exit
 """
-import argparse, gc, hashlib, json, os, sys, threading, time
+import argparse, gc, hashlib, json, logging, os, sys, threading, time
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
@@ -49,7 +49,10 @@ from model import TornadoCNN
 
 from common import nws
 from common.jsonlog import append_jsonl
+from common.oplog import setup_logging
 from common.status import atomic_write_json, deep_copy_json, utc_iso
+
+log = logging.getLogger("inference")
 
 # ---- config from env (set in docker-compose.yml) -----------------------------
 PORT             = int(os.environ.get("PORT", "9008"))
@@ -220,6 +223,15 @@ def append_score_log(state: "State", timings: dict, n0b_time, n0s_time, elapsed:
     except Exception:
         return
     append_jsonl(SCORE_LOG_PATH, record)
+    # One human-readable line per cycle (retrospective rec #5) — the JSONL is the
+    # durable record, this is what `docker logs` shows.
+    if ok:
+        log.info("cycle status=running score=%.3f n0b=%s n0s=%s delta=%ss fetch=%sms infer=%sms cycle=%dms",
+                 record["score"], record["n0b_time"], record["n0s_time"],
+                 record["scan_delta_seconds"], record["fetch_ms"], record["infer_ms"], record["cycle_ms"])
+    else:
+        log.warning("cycle status=%s error=%s: %s cycle=%dms",
+                    record["status"], record["error"], record["error_msg"], record["cycle_ms"])
 
 
 def prune_png_cache(state: "State" = None, retention_days: int = None) -> int:
@@ -254,7 +266,7 @@ def prune_png_cache(state: "State" = None, retention_days: int = None) -> int:
             if state is not None:
                 state.record_error("prune", f"{entry.name}: {type(e).__name__}: {e}")
     if removed:
-        sys.stderr.write(f"pruned {removed} cached PNG(s) older than {days}d from {cache}\n")
+        log.info("pruned %d cached PNG(s) older than %dd from %s", removed, days, cache)
     return removed
 
 
@@ -423,7 +435,10 @@ def main():
                     help="run one cycle synchronously, print status JSON, exit")
     args = ap.parse_args()
 
+    setup_logging()
     model, sha, manifest = startup_check_and_load_model()
+    log.info("inference starting: model=%s preprocess=%s threshold=%s poll=%ss retention=%dd",
+             sha[:12], manifest.get("preprocess_version"), THRESHOLD, POLL_INTERVAL, STATE_RETENTION_DAYS)
     state = State(model, sha, manifest, wld_path=get_wld_path())
     state.commit(state.last_status)   # writes the initial "uninitialized" status
 

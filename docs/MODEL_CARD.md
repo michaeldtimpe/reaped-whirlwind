@@ -1,7 +1,60 @@
 # Model Card — tornado-risk CNN (reaped-whirlwind, Part B)
 
-**Status: trained, evaluated, and deployed as Part C's annotation source.** Soft-GO under the
-gate criteria; the canonical model is at `models/v1/`.
+**Status: INVALIDATED 2026-09-06 — annotation withdrawn from live alerts; retrain required.**
+`models/v1/` is still what the inference service loads (so scores keep being logged for the
+before/after comparison), but `MODEL_ANNOTATION=off` on kappa means no email or SMS carries
+its readout. Everything below the next section describes the model as it was evaluated and is
+retained as the record of what went wrong.
+
+## Invalidation (2026-09-06)
+
+**What was found.** The first end-to-end smoke test of the *deployed* path
+(`services/inference/replay_smoke.py`: real KFWS N0B/N0S archive scans → the service's own
+`build_tensor` → `models/v1`) scored confirmed tornadoes near the radar **lower** than quiet sky:
+
+| case (SPC EF1+, distance from KFWS) | score at touchdown | −30 min |
+|---|---|---|
+| 2022-04-05 03:41Z EF2, 15 km | 0.168 | 0.210 |
+| 2022-12-13 14:14Z EF1, 27 km | 0.280 | 0.314 |
+| 2023-03-16 21:47Z EF1, 36 km | 0.296 | 0.325 |
+| 2025-03-04 11:24Z EF1, 42 km | 0.108 | 0.130 |
+| quiet 2023-08-15 21:00Z | 0.463 | |
+| quiet 2024-01-20 06:00Z (near-empty scan) | **0.719** | |
+| all-zero tensor | 0.651 | |
+
+The same four tornado days scored 0.59-0.74 when sampled **six hours before** touchdown.
+
+**Root cause: a time-zone bug in data collection.** SPC report times are CST (`tz=3` on every
+row; SPC never observes DST). `data-tools/collect.py` parsed them as naive datetimes and used
+them directly against the IEM archive, whose filenames are UTC. Every tornado, hail and wind
+scan was therefore taken **6 h before the event** — typically pre-convective or clear sky. The
+`warning_no_tornado` negatives come from IEM watchwarn, whose `ISSUED` field is already UTC, so
+they were sampled correctly and show real storms.
+
+**Why the eval looked fine.** The split was leakage-safe, but the *labels* carried the artifact:
+"sparse/empty scan ⇒ tornado, storm ⇒ not tornado" is exactly what separates shifted positives
+from correctly-timed warning negatives. That explains the whole results table — 5 % FP on
+`warning_no_tornado` (real storms, easy to reject), ~45-50 % FP on hail/wind (same shift as the
+positives, so a coin flip), PR-AUC 0.485 vs 0.33 base rate (the leak, not skill). None of the
+three baselines could exploit the artifact the way a CNN could, so "beats the baselines" was
+not evidence either.
+
+**Operational impact.** None to the primary path: the NWS relay never depended on the model.
+The annotation would have said "NOT ELEV" on genuine tornado warnings and "ELEVATED" on
+quiet nights — a falsely reassuring signal, which is why it is withdrawn rather than left as
+"experimental". No tornado warning covered the point while it was live (retrospective §2).
+
+**Fix and path back.**
+1. `collect.py` now shifts SPC times to UTC (`spc_local_to_utc`); `run_collection.sh` refuses
+   to resume into a pre-fix tree and defaults to `data/full-v2`.
+2. Re-collect (hours, network-bound), re-preprocess, retrain, re-evaluate as before.
+3. **New gate:** `replay_smoke.py` must PASS (every tornado-time scan above every quiet
+   control, ≥1 above threshold, no control above threshold) before `MODEL_ANNOTATION=on`.
+   The old eval alone was not enough to catch this; the replay is now part of the gate.
+4. The retrospective's score log (`inference-logs/scores-*.jsonl`) has been recording since
+   2026-09-05 and gives a before/after series for the swap.
+
+---
 
 ## Intended use
 Research/learning experiment: given a single-site radar snapshot, estimate whether a tornado is

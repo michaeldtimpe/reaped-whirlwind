@@ -198,8 +198,13 @@ def test_the_two_bypass_lists_are_independent():
 
 
 def test_the_defaults_put_tornado_warning_in_both_bypass_lists():
+    """Daily cap: only Tornado Warning is exempt. Cool-off is cross-type, so
+    every default Warning is exempt from it (retrospective rec #7) — it only
+    throttles watches/advisories a user opts into."""
+    from common.nws import DEFAULT_ALLOWED_EVENTS
     assert alert.DAILY_CAP_BYPASS_EVENTS == {"Tornado Warning"}
-    assert alert.COOL_OFF_BYPASS_EVENTS == {"Tornado Warning"}
+    assert alert.COOL_OFF_BYPASS_EVENTS == set(DEFAULT_ALLOWED_EVENTS)
+    assert "Tornado Warning" in alert.COOL_OFF_BYPASS_EVENTS
 
 
 def test_the_daily_cap_is_per_event_type():
@@ -228,8 +233,10 @@ def test_daily_cap_window_is_configurable():
 # ---- gate c: global cool-off ------------------------------------------------
 
 def test_cool_off_defers_a_different_event_type():
+    """An opted-in advisory is held back by a recent send of any other type."""
     ledger = [sent_row("Severe Thunderstorm Warning", minutes_ago=10)]
-    d = decide(props(event="Flood Warning", alert_id="x"), ledger=ledger)
+    d = decide(props(event="Tornado Watch", alert_id="x"), ledger=ledger,
+               allowed_events={"Tornado Watch", "Severe Thunderstorm Warning"})
     assert d.action == alert.DEFER_COOL_OFF
     assert d.cool_off_until == (NOW - timedelta(minutes=10)
                                 + timedelta(seconds=alert.COOL_OFF_SECONDS))
@@ -238,8 +245,16 @@ def test_cool_off_defers_a_different_event_type():
 
 def test_cool_off_elapsed_lets_the_next_type_through():
     ledger = [sent_row("Severe Thunderstorm Warning", minutes_ago=31)]
-    assert decide(props(event="Flood Warning", alert_id="x"),
-                  ledger=ledger).action == alert.SEND
+    assert decide(props(event="Tornado Watch", alert_id="x"), ledger=ledger,
+                  allowed_events={"Tornado Watch"}).action == alert.SEND
+
+
+def test_default_warnings_are_not_delayed_by_each_other():
+    """A Flash Flood Warning email must not hold a Severe Thunderstorm Warning
+    back 30 min (retrospective rec #7)."""
+    ledger = [sent_row("Flash Flood Warning", minutes_ago=1)]
+    for ev in ("Severe Thunderstorm Warning", "High Wind Warning", "Flood Warning"):
+        assert decide(props(event=ev, alert_id="x"), ledger=ledger).action == alert.SEND, ev
 
 
 def test_tornado_warning_bypasses_cool_off():
@@ -250,8 +265,8 @@ def test_tornado_warning_bypasses_cool_off():
 
 def test_a_non_bypass_event_is_deferred_in_the_same_situation():
     ledger = [sent_row("Flood Warning", minutes_ago=1)]
-    assert decide(props(event="High Wind Warning", alert_id="x"),
-                  ledger=ledger).action == alert.DEFER_COOL_OFF
+    assert decide(props(event="High Wind Warning", alert_id="x"), ledger=ledger,
+                  cool_off_bypass_events={"Tornado Warning"}).action == alert.DEFER_COOL_OFF
 
 
 def test_the_bypass_set_is_configurable():
@@ -299,12 +314,39 @@ def test_sms_body_fits_one_message_for_every_allowlisted_event(event):
 
 
 def test_sms_annotates_only_tornado_warnings():
-    _, tornado = alert.compose_sms(props(), "Tornado Warning", "elevated", 0.91, 0.8)
+    """The SMS carries the state WORD only — a numeric score in 140 chars
+    implies a calibration nothing has validated (retrospective rec #8)."""
+    subj, tornado = alert.compose_sms(props(), "Tornado Warning", "elevated", 0.91, 0.8)
     _, flood = alert.compose_sms(props(event="Flood Warning"), "Flood Warning",
                                  "elevated", 0.91, 0.8)
-    assert "Model ELEVATED (0.91 vs 0.80)" in tornado
+    assert "Model ELEVATED." in tornado
+    assert "0.91" not in tornado and "0.80" not in tornado
+    assert "(model:ELEVATED)" in subj
     assert "0.91" not in flood
     assert "Heed NWS" in flood
+
+
+# ---- MODEL_ANNOTATION=off: the readout is withdrawn, never scored ------------
+
+def test_withdrawn_annotation_reports_no_score_anywhere():
+    infer = {"status": "running", "last_score": 0.97,
+             "last_score_time": NOW.strftime("%Y-%m-%dT%H:%M:%SZ")}
+    state, score, thr, age = alert.classify_model_state(infer, NOW, annotation_enabled=False)
+    assert (state, score, age) == ("withdrawn", None, None)
+    subj, body = alert.compose_email(props(), "Tornado Warning", state, score, thr, age, 120)
+    assert "withdrawn" in subj and "WITHDRAWN" in body
+    assert "0.97" not in body and "Score:" not in body
+    assert "Heed" in body or "NWS" in body
+    ssubj, sbody = alert.compose_sms(props(), "Tornado Warning", state, score, thr)
+    assert "model" not in ssubj.lower() and "Model" not in sbody
+    assert "0.97" not in sbody and len(sbody) <= SMS_BODY_LIMIT
+
+
+def test_annotation_on_still_scores():
+    infer = {"status": "running", "last_score": 0.97,
+             "last_score_time": NOW.strftime("%Y-%m-%dT%H:%M:%SZ")}
+    state, score, _, _ = alert.classify_model_state(infer, NOW, annotation_enabled=True)
+    assert (state, score) == ("elevated", 0.97)
 
 
 # ---- run_cycle wiring (still offline) ---------------------------------------
@@ -363,11 +405,25 @@ def test_nws_error_accounting_keeps_its_shape(cycle, monkeypatch):
         raise RuntimeError("503 Server Error")
 
     monkeypatch.setattr(alert, "fetch_nws_alerts", boom)
-    status = alert.run_cycle(alert.State())
+    state = alert.State()
+    status = alert.run_cycle(state)
     assert status["status"] == "nws_error"
     assert status["errors"][-1]["kind"] == "nws"
     assert "RuntimeError: 503 Server Error" == status["errors"][-1]["msg"]
     assert status["last_poll_time"]
+    assert status["nws_consecutive_failures"] == 1
+    status = alert.run_cycle(state)
+    assert status["nws_consecutive_failures"] == 2
+
+
+def test_a_good_poll_resets_the_nws_failure_streak(cycle, monkeypatch):
+    state = alert.State()
+    monkeypatch.setattr(alert, "fetch_nws_alerts", lambda: (_ for _ in ()).throw(RuntimeError("502")))
+    assert alert.run_cycle(state)["nws_consecutive_failures"] == 1
+    monkeypatch.setattr(alert, "fetch_nws_alerts", lambda: [])
+    status = alert.run_cycle(state)
+    assert status["nws_consecutive_failures"] == 0
+    assert status["status"] == "running"
 
 
 def test_status_json_keeps_every_documented_key(cycle):

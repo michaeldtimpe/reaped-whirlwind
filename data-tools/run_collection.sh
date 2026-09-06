@@ -13,14 +13,24 @@
 # are validated on disk, so resume self-heals partial events). Per-PNG revalidation
 # catches truncated files from prior hard kills.
 #
-# Output: data/full/tensors/*.npy  +  data/full/tensors_manifest.csv
-# Log:    data/full/logs/collect_<timestamp>.log
+# Output: $OUT/tensors/*.npy  +  $OUT/tensors_manifest.csv   (OUT defaults to data/full-v2)
+# Log:    $OUT/logs/collect_<timestamp>.log
 #
 # On macOS, this script wraps its Python under `caffeinate -ims` so a multi-hour run
 # isn't interrupted by idle/system sleep on AC power. Display is allowed to sleep.
 set -euo pipefail
 cd "$(dirname "$0")/.."                      # repo root
-OUT="data/full"
+OUT="${OUT:-data/full-v2}"
+
+# v2 (2026-09-06): collect.py now shifts SPC report times from CST to UTC. The old
+# data/full tree was collected WITHOUT that shift (every tornado/hail/wind scan is
+# 6 h early) and its event_ids embed the wrong time, so resuming into it would
+# silently mix good and bad rows. Refuse to write into a pre-fix tree.
+if [ -f "$OUT/manifest.csv" ] && [ ! -f "$OUT/.collector-v2" ]; then
+  echo "ERROR: $OUT/manifest.csv predates the SPC time-zone fix; use a fresh OUT= dir" >&2
+  exit 1
+fi
+mkdir -p "$OUT"; touch "$OUT/.collector-v2"
 PY="${PYTHON:-python3}"
 export PYTHONUNBUFFERED=1                    # so progress prints flush live through tee
 

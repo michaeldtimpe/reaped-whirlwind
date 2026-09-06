@@ -9,7 +9,16 @@ attempts to flag tornado risk from radar. **Honesty:** the National Weather Serv
 alert — this model is a research layer and will not beat NWS. It stays permanently labeled
 *experimental*.
 
-## Current status (2026-09-05)
+## Current status (2026-09-06)
+- **MODEL INVALIDATED (2026-09-06).** The first end-to-end replay smoke test
+  (`services/inference/replay_smoke.py`) showed `models/v1` scores real KFWS tornado scans
+  *below* quiet sky. Root cause: `data-tools/collect.py` treated SPC's CST times as UTC, so every
+  tornado/hail/wind training scan was 6 h early (the warning-no-tornado negatives were correct),
+  and the CNN learned "empty sky = tornado". The Part-B eval numbers below are an artifact of
+  that leak, not skill. Collector fixed; **retrain needed** (fresh `data/full-v2`, on a machine
+  with hours of network). Live: `MODEL_ANNOTATION=off` on kappa — emails/SMS say "withdrawn",
+  no score; inference keeps scoring + logging for the before/after. **Gate for turning it back
+  on: `replay_smoke.py` PASS.** See `docs/MODEL_CARD.md` "Invalidation".
 - **Part A — DONE & deployed.** The four services (screenshot / processor / weather / dashboard) are
   unified into ONE compose project **`reaped-whirlwind`**, live on the **kappa** NAS at
   `/volume1/docker/reaped-whirlwind` (ports 9005 processor / 9006 weather / 9007 dashboard).
@@ -41,19 +50,28 @@ alert — this model is a research layer and will not beat NWS. It stays permane
   single source of truth for KFWS coordinates and the default event allowlist), a pytest suite
   under `tests/` run via `scripts/test.sh`, dead code removed across the repo, and a
   post-deployment retrospective in `docs/RETROSPECTIVE.md`.
+- **Retrospective recommendations (2026-09-06) — all 8 DONE & deployed.** #1 tornado daily-cap
+  bypass, #2 score JSONL, #3 decision JSONL, #4 PNG-cache pruning, #5 per-cycle INFO log lines
+  with `/health` access noise filtered (`common/oplog.py`), #6 NWS retries with backoff +
+  `nws_consecutive_failures` in `/health`, #7 cool-off now bypassed by every default Warning
+  (it only throttles opted-in watches/advisories), #8 SMS carries the state word, not a number.
 
 ## Data retention
 Training data (`data/full/`: `tensors_manifest.csv` + `tensors/*.npy` + `raw/*.png` + `wld/`)
-lives on the analysis machine only — not in this repo, not on kappa. Keep it (a few GB): exact
-reproduction of the `models/v1` eval needs the full manifest for the train/val/test split, and
-the train/serve skew test needs the raw PNGs. The ~389 GB legacy CONUS-mosaic archive predates
-the per-station IEM RIDGE approach, is superseded, and may be deleted. Live inference on kappa
-depends only on `models/v1` (which is in git) — none of the above.
+lives on the analysis machine only — not in this repo, not on kappa. `data/full` is the
+**pre-fix (6 h-shifted) collection**: keep it only until the `models/v1` eval has been reproduced
+once for the record, then it can go; the v2 collection goes to `data/full-v2`. The ~389 GB
+legacy CONUS-mosaic archive was searched for on kappa on 2026-09-06 and is already gone (see
+`docs/DATA.md`). Live inference on kappa depends only on `models/v1` (which is in git).
 
 ## Verifying Part C without an actual tornado
 
 ```bash
-# 1) Bit-equivalence regression (proves no train/serve skew)
+# 0) Historical replay smoke test — THE model gate. Real KFWS archive scans from confirmed
+#    tornadoes vs quiet days, through the service's own code path. Needs network, ~2 min.
+.venv/bin/python services/inference/replay_smoke.py
+
+# 1) Bit-equivalence regression (proves no train/serve skew; needs data/full on the analysis box)
 .venv/bin/python services/inference/test_tensor_equiv.py --n 5
 
 # 2) Email + SMS dry-run for any allowlisted event type (no SMTP traffic)

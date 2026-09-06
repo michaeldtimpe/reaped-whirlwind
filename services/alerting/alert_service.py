@@ -18,14 +18,18 @@ Every POLL_INTERVAL seconds:
           must never be swallowed by a 24 h cap.
        c. Global cool-off: at most one notification per COOL_OFF_SECONDS
           (30 min by default) across all event_types. Events in
-          COOL_OFF_BYPASS_EVENTS (default: "Tornado Warning") skip this
-          check — a tornado after a flood is never delayed by cool-off.
+          COOL_OFF_BYPASS_EVENTS (default: every Warning in the default
+          allowlist) skip this check — it is cross-type, so without the
+          bypass a flood email would hold a tornado or severe-storm email
+          back 30 min. It still throttles opted-in watches/advisories.
           Cool-off deferrals are NOT written to the ledger; they retry
           next cycle.
   4. Compose email (full body → ALERT_TO) and SMS (~140 char → ALERT_TO_SMS).
-     NWS text first; for Tornado Warnings, the model score is appended as a
-     numeric annotation. For non-tornado events the model readout is
-     suppressed ("N/A — model assesses tornado risk only").
+     NWS text first; for Tornado Warnings, the model state is appended as an
+     annotation (numeric score in the email only; the SMS carries the state
+     word). MODEL_ANNOTATION=off replaces it with "withdrawn" and no score.
+     For non-tornado events the model readout is suppressed ("N/A — model
+     assesses tornado risk only").
   5. Send via SMTP. Per-cycle hard cap of 5; deferred alerts retry next cycle.
   6. Append every non-trivial outcome to DECISION_LOG_PATH (month-rotated
      JSONL). alerts_sent.json is pruned to 48 h, so that ledger cannot answer
@@ -50,7 +54,7 @@ TESTING SEAM
   `tests/test_alert_suppression.py` can vary caps and windows without touching
   the environment. Behaviour is identical to the inline version this replaced.
 """
-import argparse, json, os, smtplib, ssl, sys, threading, time
+import argparse, json, logging, os, smtplib, ssl, sys, threading, time
 from datetime import datetime, timezone, timedelta
 from email.mime.text import MIMEText
 from pathlib import Path
@@ -65,7 +69,10 @@ sys.path.insert(0, "/srv/reaped" if Path("/srv/reaped/common").is_dir()
                 else str(Path(__file__).resolve().parents[2]))
 from common import nws
 from common.jsonlog import append_jsonl
+from common.oplog import setup_logging
 from common.status import atomic_write_json, deep_copy_json, utc_iso
+
+log = logging.getLogger("alerting")
 
 # ---- config from env (see docker-compose.yml) --------------------------------
 PORT              = int(os.environ.get("PORT", "9009"))
@@ -75,6 +82,18 @@ KFWS_LAT          = float(os.environ.get("KFWS_LAT",  str(nws.KFWS_LAT)))
 KFWS_LON          = float(os.environ.get("KFWS_LON", str(nws.KFWS_LON)))
 NWS_UA            = os.environ.get("NWS_UA", nws.NWS_USER_AGENT)
 THRESHOLD         = float(os.environ.get("MODEL_RISK_THRESHOLD", "0.8"))
+# api.weather.gov returns 502 / times out a few times a day. Retry inside the
+# cycle (attempts = 1 + NWS_RETRIES, NWS_RETRY_BACKOFF_SECONDS between, doubling)
+# rather than losing the whole POLL_INTERVAL; the streak is surfaced in /health.
+NWS_RETRIES       = int(os.environ.get("NWS_RETRIES", "2"))
+NWS_RETRY_BACKOFF = float(os.environ.get("NWS_RETRY_BACKOFF_SECONDS", "3"))
+# MODEL_ANNOTATION=off withdraws the CNN readout from Tornado Warning emails/SMS
+# (state "withdrawn", no score). Set on kappa on 2026-09-06 after the replay smoke
+# test (services/inference/replay_smoke.py) showed models/v1 scores real tornado
+# scans LOWER than quiet sky — see docs/MODEL_CARD.md "Invalidation". The NWS
+# relay is unaffected; the inference service keeps scoring + logging for the
+# retrain comparison. Flip back to "on" only with a model that passes the replay.
+MODEL_ANNOTATION  = os.environ.get("MODEL_ANNOTATION", "on").strip().lower() not in ("off", "0", "false", "no")
 
 INFERENCE_STATUS  = Path(os.environ.get("INFERENCE_STATUS_PATH", "/status/inference_status.json"))
 DECISION_LOG_PATH = Path(os.environ.get("DECISION_LOG_PATH", "/logs/decisions.jsonl"))
@@ -108,12 +127,17 @@ ALLOWED_EVENTS = set(_split_csv(os.environ.get("ALLOWED_EVENTS", DEFAULT_ALLOWED
 #   DAILY_CAP_BYPASS_EVENTS: events that skip the daily cap entirely.
 #   COOL_OFF_BYPASS_EVENTS:  events that skip the global cool-off.
 # The two bypass lists are independent: an event may skip one, both or neither.
-# Tornado Warning is in both by default — a DFW outbreak issues several sequential
-# tornado warnings for one point and #2 onward must still reach the phone.
+# Tornado Warning skips the daily cap by default — a DFW outbreak issues several
+# sequential tornado warnings for one point and #2 onward must still reach the
+# phone. The cool-off is CROSS-TYPE (a Flash Flood Warning email would hold a
+# Severe Thunderstorm Warning back 30 min), which is sensible for advisories a
+# user opts into but not for Warnings, so every default-allowlisted Warning
+# bypasses it (2026-09-06; retrospective rec #7). Cool-off still applies to any
+# watch/advisory added to ALLOWED_EVENTS.
 DAILY_CAP_SECONDS       = int(os.environ.get("DAILY_CAP_SECONDS", "86400"))
 COOL_OFF_SECONDS        = int(os.environ.get("COOL_OFF_SECONDS", "1800"))
 DAILY_CAP_BYPASS_EVENTS = set(_split_csv(os.environ.get("DAILY_CAP_BYPASS_EVENTS", "Tornado Warning")))
-COOL_OFF_BYPASS_EVENTS  = set(_split_csv(os.environ.get("COOL_OFF_BYPASS_EVENTS", "Tornado Warning")))
+COOL_OFF_BYPASS_EVENTS  = set(_split_csv(os.environ.get("COOL_OFF_BYPASS_EVENTS", DEFAULT_ALLOWED_EVENTS)))
 
 # Compact NWS-style abbreviations for SMS subjects.
 EVENT_ABBREV = {
@@ -155,10 +179,35 @@ def event_abbrev(event_type: str) -> str:
 
 
 # ---- NWS fetch + filter ------------------------------------------------------
-def fetch_nws_alerts():
-    """Raises on HTTP error (run_cycle counts it as a 'nws' error and sets
-    status 'nws_error'). Returns the GeoJSON `features` list."""
-    return nws.fetch_active_alerts(KFWS_LAT, KFWS_LON, user_agent=NWS_UA, timeout=10)
+class _FetchStats:
+    """How many HTTP attempts the most recent fetch_nws_alerts() call made —
+    surfaced in /health as nws_last_attempts (a rising number = NWS flaky)."""
+    attempts = 0
+
+
+FETCH_STATS = _FetchStats()
+
+
+def fetch_nws_alerts(retries=None, backoff=None, sleep=time.sleep):
+    """GeoJSON `features` list. Retries transient failures (any exception:
+    502s, ReadTimeouts, connection resets) `retries` times with doubling
+    backoff, then re-raises the LAST error — run_cycle counts that as one
+    'nws' error and sets status 'nws_error'."""
+    retries = NWS_RETRIES if retries is None else retries
+    backoff = NWS_RETRY_BACKOFF if backoff is None else backoff
+    attempts = 0
+    while True:
+        attempts += 1
+        FETCH_STATS.attempts = attempts
+        try:
+            return nws.fetch_active_alerts(KFWS_LAT, KFWS_LON, user_agent=NWS_UA, timeout=10)
+        except Exception as e:
+            if attempts > retries:
+                raise
+            log.warning("nws fetch attempt %d/%d failed: %s: %s — retrying in %.0fs",
+                        attempts, retries + 1, type(e).__name__, e, backoff)
+            sleep(backoff)
+            backoff *= 2
 
 
 def filter_to_allowed_events(features, now):
@@ -185,9 +234,14 @@ def load_inference_status():
         return None
 
 
-def classify_model_state(infer, now):
+def classify_model_state(infer, now, annotation_enabled=None):
     """Return (state_label, score, threshold, score_age_seconds). Labels:
-    'elevated', 'not elevated', 'unavailable'."""
+    'elevated', 'not elevated', 'unavailable', or 'withdrawn' when the
+    annotation is switched off (MODEL_ANNOTATION=off) — no score is surfaced
+    then, so a known-bad model can never colour an email."""
+    enabled = MODEL_ANNOTATION if annotation_enabled is None else annotation_enabled
+    if not enabled:
+        return "withdrawn", None, THRESHOLD, None
     if not infer:
         return "unavailable", None, THRESHOLD, None
     score = infer.get("last_score")
@@ -316,6 +370,10 @@ def _tornado_model_readout(model_state, score, threshold, score_age, scan_delta)
         readout = ("Score below threshold: radar features in this scan did not reach "
                    "the model's tornadic-structure cutoff. This does NOT reduce the "
                    "threat. Heed NWS guidance.")
+    elif model_state == "withdrawn":
+        readout = ("Model annotation WITHDRAWN: the current model failed its replay "
+                   "validation and is not being reported until it is retrained. "
+                   "Treat this email as a direct relay of the NWS warning above.")
     else:
         readout = "Model readout suppressed (see note below)."
 
@@ -327,6 +385,10 @@ def _tornado_model_readout(model_state, score, threshold, score_age, scan_delta)
                             "The model readout is suppressed.\n")
         else:
             stale_notice = "\nNote: the model has no recent score (service may be starting up).\n"
+
+    if model_state == "withdrawn":
+        return ("EXPERIMENTAL MODEL READOUT — withdrawn.\n\n"
+                f"{readout}\n")
 
     return (
         "EXPERIMENTAL MODEL READOUT — informational only, NOT an alert.\n\n"
@@ -391,13 +453,14 @@ def compose_sms(props, event_type, model_state, score, threshold):
     expires = (props.get("expires") or "")[:16]
     abbrev  = event_abbrev(event_type)
 
-    if event_type == "Tornado Warning":
+    if event_type == "Tornado Warning" and model_state != "withdrawn":
+        # State word only — a "0.83 vs 0.80" in an SMS implies a calibration
+        # nothing has validated (retrospective rec #8). The number is in the email.
         state_short = {"elevated": "ELEVATED", "not elevated": "NOT ELEV",
                        "unavailable": "N/A"}.get(model_state, "N/A")
-        score_str = f"{score:.2f}" if score is not None else "—"
         subject = f"{abbrev} {area[:35]} (model:{state_short})"
-        body    = (f"Tornado Warning until {expires}. Model {state_short} "
-                   f"({score_str} vs {threshold:.2f}). Heed NWS. Full details emailed.")
+        body    = (f"Tornado Warning until {expires}. Model {state_short}. "
+                   f"Heed NWS. Full details emailed.")
     else:
         subject = f"{abbrev} {area[:40]}"
         body    = (f"{event_type} until {expires}. Heed NWS. "
@@ -505,6 +568,9 @@ class State:
             "cool_off_bypass_events": sorted(COOL_OFF_BYPASS_EVENTS),
             "cool_off_seconds": COOL_OFF_SECONDS,
             "daily_cap_seconds": DAILY_CAP_SECONDS,
+            "model_annotation": "on" if MODEL_ANNOTATION else "off",
+            "nws_consecutive_failures": 0,
+            "nws_last_attempts": None,
             "errors": [],
         }
 
@@ -527,15 +593,21 @@ class State:
 # ---- cycle -------------------------------------------------------------------
 def run_cycle(state: State) -> dict:
     now = datetime.now(timezone.utc)
+    FETCH_STATS.attempts = 0
     try:
         features = fetch_nws_alerts()
+        attempts = FETCH_STATS.attempts
     except Exception as e:
         state.record_error("nws", f"{type(e).__name__}: {e}")
         log_decision("nws_error", now, error=f"{type(e).__name__}: {e}")
         status = state.snapshot()
         status["status"] = "nws_error"
         status["last_poll_time"] = utc_iso(now)
+        status["nws_consecutive_failures"] = status.get("nws_consecutive_failures", 0) + 1
+        status["nws_last_attempts"] = FETCH_STATS.attempts
         state.commit(status)
+        log.error("cycle status=nws_error consecutive_failures=%d attempts=%d err=%s: %s",
+                  status["nws_consecutive_failures"], FETCH_STATS.attempts, type(e).__name__, e)
         return status
 
     active = filter_to_allowed_events(features, now)
@@ -662,12 +734,19 @@ def run_cycle(state: State) -> dict:
     status["suppressed_daily_cap_this_cycle"] = suppressed_daily
     status["deferred_cool_off_this_cycle"] = deferred_cool_off
     status["cool_off_until"] = cool_off_until
+    status["nws_consecutive_failures"] = 0
+    status["nws_last_attempts"] = attempts
     if last_id:
         status["last_email_id"] = last_id
         status["last_email_time"] = last_time
         status["last_email_event_type"] = last_event_type
         status["model_state_last_email"] = last_state
     state.commit(status)
+    log.info("cycle status=%s active=%d by_type=%s sent=%d suppressed_daily=%d "
+             "deferred_cool_off=%d model=%s score=%s nws_attempts=%d",
+             new_status, len(active), json.dumps(by_type, sort_keys=True), sent_this_cycle,
+             suppressed_daily, deferred_cool_off, model_state,
+             "-" if score is None else f"{score:.3f}", attempts)
     return status
 
 
@@ -771,6 +850,11 @@ def main():
         test_email_main(args.event, args.dry_run)
         return
 
+    setup_logging()
+    log.info("alerting starting: allowed=%s daily_cap_bypass=%s cool_off_bypass=%s "
+             "model_annotation=%s nws_retries=%d",
+             sorted(ALLOWED_EVENTS), sorted(DAILY_CAP_BYPASS_EVENTS),
+             sorted(COOL_OFF_BYPASS_EVENTS), "on" if MODEL_ANNOTATION else "off", NWS_RETRIES)
     state = State()
     state.commit(state.last_status)
     app = make_app(state)

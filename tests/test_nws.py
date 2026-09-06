@@ -116,13 +116,45 @@ def test_connection_error_propagates_to_the_caller(monkeypatch):
 
 def test_alerting_fetcher_still_raises(monkeypatch):
     """services/alerting: run_cycle catches, records a 'nws' error, sets status
-    'nws_error'. So the fetcher must keep raising."""
+    'nws_error'. So the fetcher must keep raising — after its retries."""
     from services.alerting import alert_service
 
-    monkeypatch.setattr(nws.requests, "get",
-                        Recorder(FakeResponse(exc=requests.HTTPError("503"))))
+    rec = Recorder(FakeResponse(exc=requests.HTTPError("503")))
+    monkeypatch.setattr(nws.requests, "get", rec)
+    slept = []
     with pytest.raises(requests.HTTPError):
-        alert_service.fetch_nws_alerts()
+        alert_service.fetch_nws_alerts(retries=2, backoff=3, sleep=slept.append)
+    assert len(rec.calls) == 3                 # 1 + 2 retries
+    assert slept == [3, 6]                     # doubling backoff
+    assert alert_service.FETCH_STATS.attempts == 3
+
+
+def test_alerting_fetcher_recovers_on_a_retry(monkeypatch):
+    """A transient 502 followed by a good response is one successful cycle."""
+    from services.alerting import alert_service
+
+    responses = [FakeResponse(exc=requests.HTTPError("502")),
+                 FakeResponse({"features": FEATURES})]
+    calls = []
+
+    def flaky(url, **kwargs):
+        calls.append(url)
+        return responses[len(calls) - 1]
+
+    monkeypatch.setattr(nws.requests, "get", flaky)
+    assert alert_service.fetch_nws_alerts(retries=2, backoff=0, sleep=lambda s: None) == FEATURES
+    assert len(calls) == 2
+    assert alert_service.FETCH_STATS.attempts == 2
+
+
+def test_alerting_fetcher_with_no_retries_fails_fast(monkeypatch):
+    from services.alerting import alert_service
+
+    rec = Recorder(requests.ConnectionError("reset"))
+    monkeypatch.setattr(nws.requests, "get", rec)
+    with pytest.raises(requests.ConnectionError):
+        alert_service.fetch_nws_alerts(retries=0, sleep=lambda s: None)
+    assert len(rec.calls) == 1
 
 
 def test_alerting_fetcher_returns_features(monkeypatch):

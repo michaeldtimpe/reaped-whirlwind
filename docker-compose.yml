@@ -192,9 +192,20 @@ services:
       - DAILY_CAP_SECONDS=${DAILY_CAP_SECONDS:-86400}
       - COOL_OFF_SECONDS=${COOL_OFF_SECONDS:-1800}
       # Independent bypass lists: daily cap vs global cool-off. Tornado Warning
-      # is in both by default so an outbreak's 2nd+ warning is never swallowed.
+      # skips the daily cap so an outbreak's 2nd+ warning is never swallowed.
+      # The cool-off is cross-type, so every default Warning skips it too — it
+      # only throttles watches/advisories a user opts into (retrospective #7).
       - DAILY_CAP_BYPASS_EVENTS=${DAILY_CAP_BYPASS_EVENTS:-Tornado Warning}
-      - COOL_OFF_BYPASS_EVENTS=${COOL_OFF_BYPASS_EVENTS:-Tornado Warning}
+      - COOL_OFF_BYPASS_EVENTS=${COOL_OFF_BYPASS_EVENTS:-Tornado Warning,Severe Thunderstorm Warning,Flash Flood Warning,Flood Warning,High Wind Warning,Winter Storm Warning,Ice Storm Warning,Extreme Wind Warning}
+      # Retry api.weather.gov 502s/timeouts inside the cycle (retrospective #6).
+      - NWS_RETRIES=${NWS_RETRIES:-2}
+      - NWS_RETRY_BACKOFF_SECONDS=${NWS_RETRY_BACKOFF_SECONDS:-3}
+      # WITHDRAWN 2026-09-06: models/v1 failed the historical replay smoke test
+      # (scores real tornado scans below quiet sky — a CST/UTC bug in the
+      # training-data collector). Emails/SMS say "withdrawn" and carry no score.
+      # Set to "on" only after a retrained model passes
+      # services/inference/replay_smoke.py. See docs/MODEL_CARD.md.
+      - MODEL_ANNOTATION=${MODEL_ANNOTATION:-off}
       - SMTP_HOST=${SMTP_HOST}
       - SMTP_PORT=${SMTP_PORT:-587}
       - SMTP_USER=${SMTP_USER}

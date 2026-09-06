@@ -206,3 +206,31 @@ either way, and that is a recording failure, not a model failure.
 
 Not recommended: changing the 5-min poll interval (median delay 1.0 min is fine), or dropping
 the annotation (it is free and gated).
+
+
+---
+
+## Addendum (2026-09-06): all eight recommendations shipped — and the model is invalid
+
+**Recommendations.** #1-#4 were implemented in the session that wrote this document; #5-#8
+followed on 2026-09-06 (`common/oplog.py` per-cycle INFO lines with `/health` access noise
+filtered; NWS retries with doubling backoff and `nws_consecutive_failures` / `nws_last_attempts`
+in `/health`; every default Warning now bypasses the cross-type cool-off; the SMS body carries
+the state word only). All deployed to kappa the same day.
+
+**The bigger finding.** §4 said the annotation had "produced no evidence either way". The first
+thing done with the replay tool that section called for (`services/inference/replay_smoke.py`)
+was to score real KFWS archive scans from six SPC-confirmed tornadoes within 45 km of the radar,
+through the service's own code path. Tornado scans scored 0.11-0.30; quiet sky scored 0.46-0.72;
+an all-zero tensor scored 0.65. The same tornado days scored 0.59-0.74 when sampled six hours
+early — which is exactly what the training collector had done: SPC times are CST and were used
+as UTC. The model learned the artifact, the held-out eval measured the artifact, and the 5 %
+`warning_no_tornado` FP rate this document called "the single most informative number" was the
+artifact's clearest fingerprint (those negatives were the only class sampled at the right time).
+
+**Lesson for the retrospective itself.** §4 argued the annotation was "structurally harmless"
+and should be kept and instrumented. Harmless to the *alert path*, yes; but a model that says
+NOT ELEVATED during a real tornado warning is not harmless to the reader. The annotation is now
+withdrawn (`MODEL_ANNOTATION=off`) until a retrained model passes the replay, and the replay is
+part of the gate. The general point: an offline eval on the same collection pipeline cannot
+catch a pipeline bug — only an end-to-end check against independently-timed ground truth can.

@@ -37,6 +37,11 @@ decodes the paletted PNGs **by index** (0 = missing; N0S 15 = range-folded), geo
 Leakage-safe by **(date, station)** — every scan of one storm-day-radar stays in a single split, so
 the same mesocyclone can't appear in both train and test (`ml/dataset.py`).
 
+## Time zones (the 2026-09-06 bug)
+SPC CSV `time` is **CST on every row** (`tz=3`; SPC never observes DST). IEM archive filenames
+and the watchwarn `ISSUED` field are **UTC**. `collect.py` shifts SPC times by +6 h
+(`spc_local_to_utc`); it did not before 2026-09-06, which invalidated `models/v1`.
+
 ## Caveats
 - Values are normalized palette **index**, not calibrated dBZ/knots — consistent across classes
   (fine for an offline classifier); calibrate in Part C if the model passes.
@@ -50,9 +55,13 @@ the same mesocyclone can't appear in both train and test (`ml/dataset.py`).
   reproduction of the `models/v1` eval needs the full manifest for the leakage-safe
   (date, station) split, and the train/serve skew regression
   (`services/inference/test_tensor_equiv.py`) needs the raw PNGs to re-decode against.
-- **Superseded, may be deleted**: the ~389 GB legacy CONUS-mosaic tornado-positives archive
-  (`weather-screenshots/postive-tornado-images-11-mar-2026/` on kappa) — it predates the
-  per-station IEM RIDGE collection above and nothing in the current pipeline reads it.
+- **Legacy CONUS-mosaic archive (~389 GB, `weather-screenshots/postive-tornado-images-11-mar-2026/`
+  on kappa)**: superseded, and confirmed absent from kappa on 2026-09-06 (a full-volume scan found
+  no directory by that name or of that size; `/volume1/docker/weather-screenshots` is 5 MB).
+- **`data/full` is the pre-fix collection.** Every SPC-derived scan in it (tornado, hail, wind)
+  is 6 h early — see `docs/MODEL_CARD.md` "Invalidation". Keep it only to reproduce the
+  `models/v1` eval for the record; collect v2 into a fresh `data/full-v2`
+  (`run_collection.sh` now defaults there and refuses to resume into a pre-fix tree).
 - **Live inference depends on none of the above** — only `models/v1/` (model.pt + manifest.json),
   which is tracked in git.
 - **Re-collection is possible but not bit-identical.** Re-running `data-tools/run_collection.sh`

@@ -75,6 +75,26 @@ def nearest_station(lat, lon, max_km=MAX_RANGE_KM):
     return (best, best_km) if best_km <= max_km else (None, best_km)
 
 
+# SPC's `tz` column: 3 = CST (the value on effectively every modern row, year-round —
+# SPC does NOT observe DST), 9 = GMT/UTC, 0 = unknown. IEM RIDGE archive filenames
+# are UTC, so SPC times MUST be shifted before they are used to pick radar scans.
+# The IEM watchwarn ISSUED field is already UTC and needs no shift.
+#
+# History: models/v1 was collected WITHOUT this shift (SPC times were used as if UTC),
+# so every tornado/hail/wind scan was taken 6 h before the event — usually
+# pre-convective sky — while the warning-no-tornado negatives were at the right time.
+# The CNN learned that artifact; see docs/MODEL_CARD.md "Invalidation (2026-09-06)".
+SPC_TZ_OFFSET_HOURS = {"3": 6, "9": 0}
+
+
+def spc_local_to_utc(dt, tz):
+    """Shift an SPC report time to UTC. Returns None for unknown time zones."""
+    off = SPC_TZ_OFFSET_HOURS.get(str(tz or "").strip())
+    if off is None:
+        return None
+    return dt + timedelta(hours=off)
+
+
 def _spc_rows(url, years, label, subtype, min_ef=0):
     r = requests.get(url, timeout=120); r.raise_for_status()
     out, yset = [], set(years)
@@ -85,7 +105,11 @@ def _spc_rows(url, years, label, subtype, min_ef=0):
             if label == "tornado" and mag < min_ef: continue
             lat, lon = float(row.get("slat", 0)), float(row.get("slon", 0))
             if lat == 0 or lon == 0: continue
-            dt = datetime.strptime(f'{row.get("date","")} {row.get("time","00:00:00")}', "%Y-%m-%d %H:%M:%S")
+            dt = spc_local_to_utc(
+                datetime.strptime(f'{row.get("date","")} {row.get("time","00:00:00")}', "%Y-%m-%d %H:%M:%S"),
+                row.get("tz"))
+            if dt is None:
+                continue
             out.append({"dt": dt, "lat": lat, "lon": lon, "mag": mag,
                         "st": row.get("st","").strip().upper(), "label": label, "subtype": subtype})
         except (ValueError, KeyError):
