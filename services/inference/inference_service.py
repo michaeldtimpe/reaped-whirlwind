@@ -28,7 +28,10 @@ from pathlib import Path
 # Shared modules live under bind-mounted dirs (see docker-compose volumes):
 # /data-tools, /ml and /srv/reaped/common. Outside the container (running from a
 # checkout on the analysis machine) they resolve relative to this file instead.
-_REPO_ROOT = Path(__file__).resolve().parents[2]
+_parents = Path(__file__).resolve().parents
+# In the container this file is /app/inference_service.py (only two parents);
+# the fallback is never used there, so don't let the index itself crash startup.
+_REPO_ROOT = _parents[2] if len(_parents) > 2 else _parents[-1]
 for _name in ("data-tools", "ml"):
     _dir = Path("/" + _name)
     sys.path.insert(0, str(_dir if _dir.is_dir() else _REPO_ROOT / _name))
