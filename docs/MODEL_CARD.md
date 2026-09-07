@@ -54,6 +54,29 @@ quiet nights — a falsely reassuring signal, which is why it is withdrawn rathe
 4. The retrospective's score log (`inference-logs/scores-*.jsonl`) has been recording since
    2026-09-05 and gives a before/after series for the swap.
 
+### v2 attempt (2026-09-06/07, m5) — GATE: FAIL, annotation stays withdrawn
+
+Re-collected with the fixed collector (`data/full-v2`: 14,5xx scans, 2,910 events, same caps),
+trained 30 epochs on MPS (~1 min), best val PR-AUC 0.566 at epoch 24 while train loss fell
+0.77 → 0.33 (overfitting from ~epoch 10; `--patience 0`). Held-out test, base rate 0.367:
+
+| model | PR-AUC | ROC-AUC |
+|---|---|---|
+| CNN v2 | 0.543 | 0.715 |
+| refl mean | 0.536 | 0.682 |
+| vel shear | 0.410 | 0.554 |
+
+FP @ 0.5: hail 5 %, wind 13 %, `warning_no_torn` 14 %. Precision 0.575 at recall 0.3 needs
+threshold **0.43**; at 0.8 recall is ~0.
+
+Replay (same six cases): tornado-time scores 0.05-0.47, ±5 min swings of 0.3, Dec-13 outbreak
+0.47-0.78, quiet August afternoon **0.000** (was 0.463 — the inversion is gone), but the
+near-empty January night scan still **0.62**. Verdict: FAIL, 0/4 positives above every control.
+
+Reading: with correct timing the CNN is no better than mean reflectivity — the leak was the
+entire "skill" of v1. The empty-scan score is undefined behaviour: no training class contains
+quiet sky. Nothing here is deployable; `MODEL_ANNOTATION` stays off.
+
 ---
 
 ## Intended use

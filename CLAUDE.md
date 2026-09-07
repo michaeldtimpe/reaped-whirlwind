@@ -19,6 +19,10 @@ alert — this model is a research layer and will not beat NWS. It stays permane
   with hours of network). Live: `MODEL_ANNOTATION=off` on kappa — emails/SMS say "withdrawn",
   no score; inference keeps scoring + logging for the before/after. **Gate for turning it back
   on: `replay_smoke.py` PASS.** See `docs/MODEL_CARD.md` "Invalidation".
+  **v2 retrain (2026-09-07, `data/full-v2` on m5, `ml/runs/20260906_202607`): GATE FAIL.**
+  Correctly-timed CNN ≈ mean-reflectivity baseline (PR-AUC 0.543 vs 0.536); still scores a
+  near-empty night scan 0.62. Annotation remains withdrawn. `scripts/train_and_gate.sh` is
+  the one-shot train + eval + gate; `SKIP_TRAIN=1` re-gates `ml/runs/LATEST`.
 - **Part A — DONE & deployed.** The four services (screenshot / processor / weather / dashboard) are
   unified into ONE compose project **`reaped-whirlwind`**, live on the **kappa** NAS at
   `/volume1/docker/reaped-whirlwind` (ports 9005 processor / 9006 weather / 9007 dashboard).
