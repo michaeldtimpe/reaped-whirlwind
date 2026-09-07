@@ -56,6 +56,12 @@ Gate to Phase 2: label-sanity > 90 % for all event classes; cross-check passes 5
 
 ## Phase 2 — the right model (1 week of evenings)
 
+**2026-09-07: `docs/MRMS_MIGRATION.md` supersedes Phase 2.1's hand-rolled azimuthal-shear
+baseline below.** NOAA already publishes the quantity 2.1 was going to approximate
+(`MergedAzShear_0-2kmAGL`, multi-radar, 2-min cadence, masked below 20 dBZ) — use that instead of
+reimplementing it from the velocity PNGs. See that doc for the full plan; Phase 2.2-2.4 (CNN,
+calibration, sequence input) are unaffected and still apply if a CNN is revisited later.
+
 The question is not "can a CNN learn tornadoes" but "what is the strongest thing that passes
 S1-S6". Build the ladder and stop at the highest rung that passes.
 
