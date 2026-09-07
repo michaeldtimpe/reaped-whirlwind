@@ -228,7 +228,33 @@ shadow (spring 2027) per the ROADMAP as written.
 
 ## Results
 
-_Pending Phase 1. Paste the `replay.py` table and the chosen threshold here._
+### Phase 0 — spike (2026-09-07): GO
+
+Scratch script + full output in `scratch/mrms-spike/` (untracked). Environment: eccodes 2.48.0 /
+eccodeslib 2.48.0.26 via `pip install eccodes`, clean on macOS arm64 — no brew/apt.
+
+| Check | Result |
+|---|---|
+| Crowley/Burleson EF2, 2022-04-05 03:44-03:48Z | max 0.014-0.017 s⁻¹ at 10-19 km from Burleson (bar: ≥0.008 within 20 km) |
+| Live quiet evening, 2026-09-07 22:48Z | 0.0000 s⁻¹, 0 / 120,293 domain cells nonzero |
+| Other WSR-88D inside 100 km | none (nearest KDYX 183 km) — only KFWS's own 5 km disc is needed |
+| NCEP index | 1610 files, 26.8 h retention, 1-2 min lag |
+| Per-product cycle cost | ~0.35 s download + ~0.5 s decode; slice trivial |
+
+**Grid facts Phase 1 must bake in (all three products share the grid):** Ni 14000 × Nj 7000,
+first point (54.9975, 230.0025), last (20.0025, 299.9975), 0.005° both axes, `jScansPositively`
+false so **row 0 is north**; **longitudes are 0-360** (normalise site lons with `+360` before
+indexing, and `-360` when reporting). `lat = lat0 - row*0.005`, `lon = lon0 + col*0.005`.
+Discipline 209 / category 3 / number 0 (AzShear) or 2 (RotationTrack30min); eccodes reports
+`shortName`/`units` as `unknown` for this local table, so the 0.001 s⁻¹ scale is hardcoded. Raw
+values are small integers as floats (17.0 → 0.017 s⁻¹); no 9999 sentinel appears in practice.
+`codes_grib_new_from_file` needs a real file descriptor — spill the gunzipped bytes to a tempfile,
+`io.BytesIO` fails. The 30-min RotationTrack max at 03:40Z sat 89 km NNE, not at Burleson —
+confirms showing both products rather than picking one.
+
+### Phase 1 — backtest + threshold
+
+_Pending. Paste the `replay.py` table and the chosen threshold here._
 
 ## 5. Risks and open questions
 

@@ -52,3 +52,6 @@ ml/runs/
 
 # Local agent-tool scratch/cache dirs — not project content.
 .luxe/
+
+# scratch spikes (Phase 0 MRMS etc.)
+scratch/
