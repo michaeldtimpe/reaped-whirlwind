@@ -111,7 +111,8 @@ data-tools/ collect.py iem.py run_collection.sh README.md      # Part B data col
             (iem.py is shared with services/inference)
 ml/ preprocess.py dataset.py model.py train.py evaluate.py run_training.sh
 models/ v1/ {model.pt, manifest.json, run.json, eval.json, MANIFEST.md}  # canonical deploy
-docs/ ARCHITECTURE.md DEPLOY.md DATA.md MODEL_CARD.md RETROSPECTIVE.md
+docs/ ARCHITECTURE.md DEPLOY.md DATA.md MODEL_CARD.md RETROSPECTIVE.md ROADMAP.md
+      (ROADMAP.md = the plan + success criteria S1-S7 for making the annotation trustworthy)
 ```
 Data is **not** in the repo: live captures/status are bind-mounted on kappa; training data lives
 only on the analysis machine under `data/` (gitignored) — see "Data retention" above. Secrets
