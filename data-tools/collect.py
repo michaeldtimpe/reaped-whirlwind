@@ -6,7 +6,11 @@ Pulls per-station IEM RIDGE **N0B** (super-res reflectivity) + **N0S** (storm-re
 velocity) — the consistent 2020-2025 / live-era product pair — for:
   POSITIVES : SPC confirmed tornadoes
   NEGATIVES : SPC hail + SPC wind (severe, non-tornadic) AND
-              tornado-WARNINGS with NO confirmed tornado (the hardest negatives)
+              tornado-WARNINGS with NO confirmed tornado (the hardest negatives) AND
+              QUIET sky: random station/time with no SPC report or TO.W within
+              QUIET_EXCL_KM / ±QUIET_EXCL_HOURS. Without this class the model's
+              answer for an empty scan is undefined — models/v1 and the v2 retrain
+              both scored a near-empty night 0.6+ (docs/MODEL_CARD.md).
 
 Stations: all CONUS WSR-88D (fetched live from IEM, with an embedded fallback).
 Products have different cadences, so we list each product's archive dir and pair
@@ -14,8 +18,9 @@ nearest-available frames. 150 km range cutoff.
 
 Full run (M4 Pro): see run_collection.sh.  Quick check: --sample 50
 """
-import argparse, csv, io, math, os, time, zipfile, json, urllib.request
+import argparse, csv, io, math, os, random, time, zipfile, json, urllib.request
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from pathlib import Path
 import requests
@@ -35,6 +40,9 @@ WINDOW_BEFORE_MIN, WINDOW_AFTER_MIN = 30, 10
 VEL_TOL_MIN = 8
 REQUEST_DELAY_SEC = 0.25
 MAX_RANGE_KM = 150
+FETCH_WORKERS = 4            # concurrent PNG fetches per event (IEM-polite; was 1)
+QUIET_EXCL_KM, QUIET_EXCL_HOURS = 200, 6
+QUIET_CENTER_MAX_KM = 100    # crop centre: random point this close to the station
 
 # Embedded fallback if the live station list can't be fetched (central/southern US).
 FALLBACK_STATIONS = [
@@ -119,6 +127,39 @@ def _spc_rows(url, years, label, subtype, min_ef=0):
 
 def fetch_tornadoes(years, min_ef):
     return _spc_rows(SPC_TORNADO_URL, years, "tornado", "tornado", min_ef=min_ef)
+
+
+def sample_quiet(years, all_events, n, seed=42, excl_km=QUIET_EXCL_KM, excl_hours=QUIET_EXCL_HOURS):
+    """QUIET negatives: random (station, UTC time) pairs with no SPC report of any
+    kind (tornado incl. EF0, hail, wind) and no TO.W within `excl_km` / ±`excl_hours`.
+    Ordinary rain is allowed — the class is "nothing severe", not "clear air".
+    The crop centre is a random point within QUIET_CENTER_MAX_KM of the station
+    so the geometry matches the event-centred classes. Deterministic per seed."""
+    rng = random.Random(seed)
+    by_day = defaultdict(list)
+    for e in all_events:
+        by_day[e["dt"].date()].append(e)
+    out, tries = [], 0
+    while len(out) < n and tries < n * 100:
+        tries += 1
+        sid, slat, slon = rng.choice(STATIONS)
+        y = rng.choice(years)
+        dt = datetime(y, 1, 1) + timedelta(minutes=rng.randrange(365 * 24 * 60))
+        near = False
+        for dd in (dt.date() - timedelta(days=1), dt.date(), dt.date() + timedelta(days=1)):
+            for e in by_day.get(dd, []):
+                if abs((e["dt"] - dt).total_seconds()) <= excl_hours * 3600 and \
+                   haversine_km(slat, slon, e["lat"], e["lon"]) <= excl_km:
+                    near = True; break
+            if near: break
+        if near:
+            continue
+        b, r = rng.uniform(0, 2 * math.pi), rng.uniform(0, QUIET_CENTER_MAX_KM)
+        lat = slat + (r * math.cos(b)) / 111.0
+        lon = slon + (r * math.sin(b)) / (111.0 * math.cos(math.radians(slat)))
+        out.append({"dt": dt, "lat": round(lat, 4), "lon": round(lon, 4), "mag": -1,
+                    "st": sid, "label": "no_tornado", "subtype": "quiet"})
+    return out
 
 
 def fetch_spc_negs(years, fmt, subtype):
@@ -227,51 +268,63 @@ def collect(events, out: Path, max_scans, label, writer, fh, already_done, count
         chosen = sorted(window[:max_scans])
         base = ARCH.format(y=day.year, m=day.month, d=day.day, s=s, prod=REFL_PROD)
         vbase = ARCH.format(y=day.year, m=day.month, d=day.day, s=s, prod=VEL_PROD)
-        ev_rows = []
-        for t in chosen:
+        if chosen and station not in seen_wld:
+            wld_path = wdir / f"{station}.wld"
+            if wld_path.exists() and wld_path.read_text().strip():
+                seen_wld.add(station)
+            else:
+                w = fetch_text(base + reflt[chosen[0]].replace(".png", ".wld"))
+                if w:
+                    wld_path.write_text(w); seen_wld.add(station)
+
+        def _scan(t):
+            """Fetch+validate one scan's N0B (+N0S). Returns (row|None, downloaded, reused).
+            Thread-safe: touches only its own two files."""
+            dl = re = 0
             ts = t.strftime("%Y%m%d_%H%M")
             rp = raw / f"{eid}_{ts}_{REFL_PROD}.png"
             if rp.exists() and validate_png_on_disk(rp):
-                counters["png_reused"] += 1
+                re += 1
             else:
                 if rp.exists():
                     rp.unlink()  # corrupt stub from prior crash
                 refl = fetch_png(base + reflt[t]); time.sleep(REQUEST_DELAY_SEC)
                 if refl is None:
-                    continue  # skip this scan; missing reflectivity disqualifies it
-                rp.write_bytes(refl); counters["png_downloaded"] += 1
+                    return None, dl, re  # missing reflectivity disqualifies the scan
+                rp.write_bytes(refl); dl += 1
                 if not validate_png_on_disk(rp):
                     rp.unlink(missing_ok=True)
-                    continue
+                    return None, dl, re
             vp = ""; vt = nearest(velt, t, VEL_TOL_MIN)
             if vt:
                 vpp = raw / f"{eid}_{ts}_{VEL_PROD}.png"
                 if vpp.exists() and validate_png_on_disk(vpp):
-                    counters["png_reused"] += 1
+                    re += 1
                     vp = str(vpp.relative_to(out))
                 else:
                     if vpp.exists():
                         vpp.unlink()
                     v = fetch_png(vbase + velt[vt]); time.sleep(REQUEST_DELAY_SEC)
                     if v:
-                        vpp.write_bytes(v); counters["png_downloaded"] += 1
+                        vpp.write_bytes(v); dl += 1
                         if validate_png_on_disk(vpp):
                             vp = str(vpp.relative_to(out))
                         else:
                             vpp.unlink(missing_ok=True)
-            if station not in seen_wld:
-                wld_path = wdir / f"{station}.wld"
-                if wld_path.exists() and wld_path.read_text().strip():
-                    seen_wld.add(station)
-                else:
-                    w = fetch_text(base + reflt[t].replace(".png", ".wld"))
-                    if w:
-                        wld_path.write_text(w); seen_wld.add(station)
-            ev_rows.append({"event_id": eid, "label": 1 if label == "tornado" else 0, "class": label,
-                            "subtype": ev["subtype"], "station": station, "mag": ev["mag"],
-                            "event_lat": ev["lat"], "event_lon": ev["lon"], "dist_km": round(dist, 1),
-                            "date": ev["dt"].strftime("%Y-%m-%d"), "scan_time": t.strftime("%Y-%m-%dT%H:%MZ"),
-                            "refl": str(rp.relative_to(out)), "vel": vp})
+            row = {"event_id": eid, "label": 1 if label == "tornado" else 0, "class": label,
+                   "subtype": ev["subtype"], "station": station, "mag": ev["mag"],
+                   "event_lat": ev["lat"], "event_lon": ev["lon"], "dist_km": round(dist, 1),
+                   "date": ev["dt"].strftime("%Y-%m-%d"), "scan_time": t.strftime("%Y-%m-%dT%H:%MZ"),
+                   "refl": str(rp.relative_to(out)), "vel": vp}
+            return row, dl, re
+
+        ev_rows = []
+        with ThreadPoolExecutor(max_workers=FETCH_WORKERS) as pool:
+            for row, dl, re in pool.map(_scan, chosen):   # map keeps `chosen` order
+                counters["png_downloaded"] += dl
+                counters["png_reused"] += re
+                if row is not None:
+                    ev_rows.append(row)
         if not ev_rows:
             continue
         # COMMIT BARRIER: all artifacts on disk; flush rows for this event together.
@@ -294,16 +347,23 @@ def collect(events, out: Path, max_scans, label, writer, fh, already_done, count
     return written_total
 
 
-def sub(lst, n):
-    return lst[:: max(1, len(lst)//n)][:n] if n else lst
+def sub(lst, n, seed=42):
+    """First n of a seeded shuffle, so a larger cap is a SUPERSET of a smaller one
+    (resume-friendly). n=0 -> everything. (Pre-2026-09-07 this was a stride sample.)"""
+    if not n or n >= len(lst):
+        return list(lst)
+    idx = list(range(len(lst)))
+    random.Random(seed).shuffle(idx)
+    return [lst[i] for i in sorted(idx[:n])]
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--years", nargs="+", type=int, default=[2020,2021,2022,2023,2024,2025])
     ap.add_argument("--min-ef", type=int, default=1)
-    ap.add_argument("--cap-pos", type=int, default=2500, help="max tornado events")
-    ap.add_argument("--cap-neg-each", type=int, default=1000, help="max events per negative source")
+    ap.add_argument("--cap-pos", type=int, default=0, help="max tornado events (0 = all)")
+    ap.add_argument("--cap-neg-each", type=int, default=2000, help="max events per hail/wind/warning source")
+    ap.add_argument("--cap-quiet", type=int, default=1500, help="quiet-sky negative events (0 = none)")
     ap.add_argument("--sample", type=int, default=None, help="quick test: N events per class-source")
     ap.add_argument("--max-scans", type=int, default=5)
     ap.add_argument("--out", default="../data/full")
@@ -314,19 +374,25 @@ def main():
     print("Loading CONUS NEXRAD stations..."); STATIONS = load_stations(); print(f"  stations: {len(STATIONS)}")
     cap_pos = args.sample or args.cap_pos
     cap_neg = args.sample or args.cap_neg_each
+    cap_quiet = args.sample or args.cap_quiet
 
     years = [max(args.years)] if args.sample else args.years   # sample = 1 recent year (fast)
     print(f"Fetching events for years {years}...")
-    torn_all = fetch_tornadoes(years, args.min_ef)
+    torn_any = fetch_tornadoes(years, 0)                 # incl. EF0/EFU — for exclusion zones
+    torn_all = [t for t in torn_any if t["mag"] >= args.min_ef]
     hail = fetch_spc_negs(years, SPC_HAIL_URL_FMT, "hail")
     wind = fetch_spc_negs(years, SPC_WIND_URL_FMT, "wind")
     warn = fetch_warnings_no_tornado(years, torn_all)   # uses FULL tornado list to exclude
-    print(f"  tornado={len(torn_all)} hail={len(hail)} wind={len(wind)} warn_no_torn={len(warn)}")
+    quiet = sample_quiet(years, torn_any + hail + wind + warn, cap_quiet) if cap_quiet else []
+    print(f"  tornado={len(torn_all)} hail={len(hail)} wind={len(wind)} warn_no_torn={len(warn)} "
+          f"quiet={len(quiet)}")
 
     pos = sub(torn_all, cap_pos)
-    neg = sub(hail, cap_neg) + sub(wind, cap_neg) + sub(warn, cap_neg)
+    neg = sub(hail, cap_neg) + sub(wind, cap_neg) + sub(warn, cap_neg) + quiet
     print(f"  collecting: pos={len(pos)}  neg={len(neg)} "
-          f"(hail {min(len(hail),cap_neg)} / wind {min(len(wind),cap_neg)} / warn {min(len(warn),cap_neg)})")
+          f"(hail {min(len(hail),cap_neg) if cap_neg else len(hail)} / "
+          f"wind {min(len(wind),cap_neg) if cap_neg else len(wind)} / "
+          f"warn {min(len(warn),cap_neg) if cap_neg else len(warn)} / quiet {len(quiet)})")
 
     man = out / "manifest.csv"
     already_done = load_existing_manifest(man)

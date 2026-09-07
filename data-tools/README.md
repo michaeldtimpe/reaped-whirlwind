@@ -11,6 +11,9 @@ per-station IEM RIDGE radar for confirmed events. Designed to run on a spare mac
   - SPC **wind** reports (severe, non-tornadic)
   - **tornado-WARNINGS with no confirmed tornado** — the hardest/most valuable negatives
     (NWS TO.W warnings, excluding any within 30 km / 45 min of a confirmed tornado)
+  - **quiet sky** — random station/time with no SPC report (any type, incl. EF0) and no TO.W
+    within 200 km / ±6 h. Added 2026-09-07: without it the model's output on an empty scan is
+    undefined (v1 and the v2 retrain both scored a near-empty night ≥0.6).
 - Products: per-station **N0B** (super-res reflectivity) + **N0S** (storm-relative velocity) —
   the consistent 2020-2025 / live-era pair (`~1 km/px`, station-centered).
 - Stations: all CONUS WSR-88D (fetched live from IEM; embedded fallback).
@@ -28,9 +31,12 @@ cd reaped-whirlwind/data-tools
 ./run_collection.sh
 ```
 Needs Python 3.10+ and internet. The script creates `.venv` and installs
-`requests numpy pillow pyshp`. Defaults: years 2020-2025, up to 2500 tornado events +
-1000 each of hail/wind/warning-no-tornado, 5 scans/event. Tune with
-`--cap-pos`, `--cap-neg-each`, `--max-scans`, `--years`.
+`requests numpy pillow pyshp`. Defaults (since 2026-09-07): years 2020-2025, ALL EF1+ tornado
+events + 2000 each of hail/wind/warning-no-tornado + 1500 quiet, 5 scans/event, 4 concurrent
+PNG fetches per event. Tune with `--cap-pos` (0 = all), `--cap-neg-each`, `--cap-quiet`,
+`--max-scans`, `--years`. Subsampling is a seeded shuffle prefix, so a larger cap is a
+superset of a smaller one and resuming after raising a cap only fetches the new events.
+**SPC times are CST and are shifted to UTC** (`spc_local_to_utc`) — see docs/DATA.md.
 
 ## Output
 ```
