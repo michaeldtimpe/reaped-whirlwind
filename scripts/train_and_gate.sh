@@ -4,6 +4,7 @@
 #
 #   ./scripts/train_and_gate.sh data/full-v2            # train on a collection
 #   ./scripts/train_and_gate.sh data/full-v2 --epochs 50
+#   SKIP_TRAIN=1 ./scripts/train_and_gate.sh          # re-gate ml/runs/LATEST only
 #
 # Runs ml/run_training.sh (train → held-out eval), then writes the run's
 # manifest.json (sha256 + preprocess_version + threshold) so the inference
@@ -25,12 +26,18 @@ LOG="ml/runs/gate_${TS}.log"
 exec > >(tee -a "$LOG") 2>&1
 echo "[log] $LOG"
 
-echo "[1/3] train + eval on $DATA"
-./ml/run_training.sh "$DATA" "$@"
+if [ "${SKIP_TRAIN:-0}" = "1" ]; then
+  echo "[1/3] SKIP_TRAIN=1 — gating the existing run in ml/runs/LATEST"
+else
+  echo "[1/3] train + eval on $DATA"
+  ./ml/run_training.sh "$DATA" "$@"
+fi
 
 RUN="ml/$(cat ml/runs/LATEST)"      # LATEST is relative to ml/
 echo "[2/3] manifest for $RUN"
-.venv-train/bin/pip install -q flask   # replay imports the service module
+# The replay imports the inference service module (flask) and ml/preprocess
+# (pillow); run_training's venv only has torch + numpy.
+.venv-train/bin/pip install -q flask pillow requests
 .venv-train/bin/python - "$RUN" "$DATA" <<'EOF'
 import hashlib, json, subprocess, sys
 from datetime import datetime, timezone
