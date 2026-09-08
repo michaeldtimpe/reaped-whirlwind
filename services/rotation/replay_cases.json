@@ -1,0 +1,619 @@
+{
+  "generated": "2026-09-07T23:07:17Z",
+  "notes": "Replay case set for the MRMS AzShear backtest gate (docs/MRMS_MIGRATION.md \u00a73, docs/ROADMAP.md Phase 4.1), built by services/rotation/build_cases.py. Positives: SPC tornado CSV (https://www.spc.noaa.gov/wcm/data/1950-2025_actual_tornadoes.csv), EF1+ within 100 km of KFWS (32.5728,-97.3031), 2020-10-14..2025-12-31 (the S3 AzShear archive start is the hard floor), SPC local time (CST, tz=3) shifted +6h to UTC per data-tools/collect.py's fix, plus the 5 base cases from the migration doc matched back to their SPC row where possible. Quiet controls: UTC hours spread across all 12 months and the 03/09/15/21Z diurnal cycle, 2021-2025, on days with no SV.W/TO.W/SV.A/TO.A/FF.W/MA.W VTEC event for WFO FWD on that date or the adjacent day (source: mesonet.agron.iastate.edu/json/vtec_events.py), seeded-random day-of-month for reproducibility. SV.W controls: WFO FWD Severe Thunderstorm Warnings (IEM watchwarn shapefile export, STATUS=NEW polygon centroid) within 100 km of KFWS, deduped to one per UTC day, on days with no SPC tornado (any EF) within 150 km of KFWS and no FWD TO.W that day; time = issuance + 10 min. Nearest-place naming uses common/places.py's DFW town table (<=20 km) falling back to the containing Texas county.",
+  "positives": [
+    {
+      "id": "2020-11-25-arlington",
+      "time": "2020-11-25T02:51:00Z",
+      "lat": 32.692,
+      "lon": -97.1472,
+      "ef": 2,
+      "km_from_kfws": 19.7,
+      "source": "spc"
+    },
+    {
+      "id": "2021-05-04-hill-county",
+      "time": "2021-05-04T00:18:00Z",
+      "lat": 32.1426,
+      "lon": -97.4449,
+      "ef": 2,
+      "km_from_kfws": 49.7,
+      "source": "spc"
+    },
+    {
+      "id": "2021-05-04-waxahachie",
+      "time": "2021-05-04T01:43:00Z",
+      "lat": 32.28,
+      "lon": -96.91,
+      "ef": 2,
+      "km_from_kfws": 49.2,
+      "source": "spc"
+    },
+    {
+      "id": "2021-05-16-garland",
+      "time": "2021-05-16T19:10:00Z",
+      "lat": 32.8972,
+      "lon": -96.778,
+      "ef": 1,
+      "km_from_kfws": 60.9,
+      "source": "spc"
+    },
+    {
+      "id": "2022-03-21-cooke-county",
+      "time": "2022-03-21T22:17:00Z",
+      "lat": 33.4322,
+      "lon": -97.3292,
+      "ef": 1,
+      "km_from_kfws": 95.6,
+      "source": "spc"
+    },
+    {
+      "id": "2022-03-30-terrell",
+      "time": "2022-03-30T09:34:00Z",
+      "lat": 32.834,
+      "lon": -96.3474,
+      "ef": 1,
+      "km_from_kfws": 94.0,
+      "source": "spc"
+    },
+    {
+      "id": "2022-04-05-crowley",
+      "time": "2022-04-05T03:41:00Z",
+      "lat": 32.483,
+      "lon": -97.4275,
+      "ef": 2,
+      "km_from_kfws": 15.4,
+      "source": "spc"
+    },
+    {
+      "id": "2022-12-13-palo-pinto-county",
+      "time": "2022-12-13T12:31:00Z",
+      "lat": 32.5735,
+      "lon": -98.138,
+      "ef": 1,
+      "km_from_kfws": 78.2,
+      "source": "spc"
+    },
+    {
+      "id": "2022-12-13-decatur",
+      "time": "2022-12-13T12:59:00Z",
+      "lat": 33.1195,
+      "lon": -97.6563,
+      "ef": 2,
+      "km_from_kfws": 69.2,
+      "source": "spc"
+    },
+    {
+      "id": "2022-12-13-erath-county",
+      "time": "2022-12-13T13:34:00Z",
+      "lat": 32.3331,
+      "lon": -98.0242,
+      "ef": 1,
+      "km_from_kfws": 72.7,
+      "source": "spc"
+    },
+    {
+      "id": "2022-12-13-fort-worth",
+      "time": "2022-12-13T14:14:00Z",
+      "lat": 32.7945,
+      "lon": -97.4096,
+      "ef": 1,
+      "km_from_kfws": 26.6,
+      "source": "spc"
+    },
+    {
+      "id": "2022-12-13-keller",
+      "time": "2022-12-13T14:34:00Z",
+      "lat": 32.8863,
+      "lon": -97.2055,
+      "ef": 1,
+      "km_from_kfws": 36.0,
+      "source": "spc"
+    },
+    {
+      "id": "2022-12-13-keller-2",
+      "time": "2022-12-13T14:42:00Z",
+      "lat": 32.9282,
+      "lon": -97.1016,
+      "ef": 1,
+      "km_from_kfws": 43.8,
+      "source": "spc"
+    },
+    {
+      "id": "2022-12-13-lewisville",
+      "time": "2022-12-13T14:49:00Z",
+      "lat": 32.965,
+      "lon": -97.044,
+      "ef": 1,
+      "km_from_kfws": 49.9,
+      "source": "spc"
+    },
+    {
+      "id": "2023-03-16-irving",
+      "time": "2023-03-16T21:47:00Z",
+      "lat": 32.8066,
+      "lon": -97.0338,
+      "ef": 1,
+      "km_from_kfws": 36.2,
+      "source": "spc"
+    },
+    {
+      "id": "2023-03-16-irving-2",
+      "time": "2023-03-16T21:52:00Z",
+      "lat": 32.8375,
+      "lon": -96.9593,
+      "ef": 1,
+      "km_from_kfws": 43.6,
+      "source": "spc"
+    },
+    {
+      "id": "2023-03-17-corsicana",
+      "time": "2023-03-17T00:58:00Z",
+      "lat": 32.1319,
+      "lon": -96.495,
+      "ef": 1,
+      "km_from_kfws": 90.4,
+      "source": "spc"
+    },
+    {
+      "id": "2023-03-24-mineral-wells",
+      "time": "2023-03-24T09:52:00Z",
+      "lat": 32.9467,
+      "lon": -98.0363,
+      "ef": 1,
+      "km_from_kfws": 80.2,
+      "source": "spc"
+    },
+    {
+      "id": "2023-03-24-parker-county",
+      "time": "2023-03-24T09:56:00Z",
+      "lat": 32.9597,
+      "lon": -97.91,
+      "ef": 1,
+      "km_from_kfws": 71.2,
+      "source": "spc"
+    },
+    {
+      "id": "2023-05-12-palo-pinto-county",
+      "time": "2023-05-12T02:20:00Z",
+      "lat": 32.733,
+      "lon": -98.3358,
+      "ef": 1,
+      "km_from_kfws": 98.3,
+      "source": "spc"
+    },
+    {
+      "id": "2024-04-26-mclennan-county",
+      "time": "2024-04-26T17:48:00Z",
+      "lat": 31.7754,
+      "lon": -97.0496,
+      "ef": 2,
+      "km_from_kfws": 91.8,
+      "source": "spc"
+    },
+    {
+      "id": "2024-04-26-hill-county",
+      "time": "2024-04-26T18:06:00Z",
+      "lat": 31.8287,
+      "lon": -96.9664,
+      "ef": 1,
+      "km_from_kfws": 88.6,
+      "source": "spc"
+    },
+    {
+      "id": "2024-04-26-navarro-county",
+      "time": "2024-04-26T18:30:00Z",
+      "lat": 31.9508,
+      "lon": -96.8032,
+      "ef": 1,
+      "km_from_kfws": 83.6,
+      "source": "spc"
+    },
+    {
+      "id": "2024-04-26-corsicana",
+      "time": "2024-04-26T18:46:00Z",
+      "lat": 32.0764,
+      "lon": -96.674,
+      "ef": 1,
+      "km_from_kfws": 80.9,
+      "source": "spc"
+    },
+    {
+      "id": "2024-04-26-hill-county-2",
+      "time": "2024-04-26T18:49:00Z",
+      "lat": 31.883,
+      "lon": -97.0869,
+      "ef": 1,
+      "km_from_kfws": 79.4,
+      "source": "spc"
+    },
+    {
+      "id": "2024-05-26-denton",
+      "time": "2024-05-26T03:46:00Z",
+      "lat": 33.376,
+      "lon": -97.1193,
+      "ef": 1,
+      "km_from_kfws": 90.9,
+      "source": "spc"
+    },
+    {
+      "id": "2025-03-04-wise-county",
+      "time": "2025-03-04T10:30:00Z",
+      "lat": 33.1057,
+      "lon": -97.7517,
+      "ef": 1,
+      "km_from_kfws": 72.6,
+      "source": "spc"
+    },
+    {
+      "id": "2025-03-04-dallas",
+      "time": "2025-03-04T11:24:00Z",
+      "lat": 32.8179,
+      "lon": -96.9572,
+      "ef": 1,
+      "km_from_kfws": 42.3,
+      "source": "spc"
+    },
+    {
+      "id": "2025-04-20-erath-county",
+      "time": "2025-04-20T01:20:00Z",
+      "lat": 32.0588,
+      "lon": -98.0752,
+      "ef": 1,
+      "km_from_kfws": 92.4,
+      "source": "spc"
+    },
+    {
+      "id": "2025-04-20-hood-county",
+      "time": "2025-04-20T01:55:00Z",
+      "lat": 32.2977,
+      "lon": -97.9718,
+      "ef": 2,
+      "km_from_kfws": 69.8,
+      "source": "spc"
+    },
+    {
+      "id": "2025-04-20-weatherford",
+      "time": "2025-04-20T03:16:00Z",
+      "lat": 32.7944,
+      "lon": -97.8505,
+      "ef": 1,
+      "km_from_kfws": 56.8,
+      "source": "spc"
+    },
+    {
+      "id": "2025-04-20-mineral-wells",
+      "time": "2025-04-20T03:39:00Z",
+      "lat": 32.6966,
+      "lon": -98.0047,
+      "ef": 1,
+      "km_from_kfws": 67.1,
+      "source": "spc"
+    },
+    {
+      "id": "2025-04-20-weatherford-2",
+      "time": "2025-04-20T04:01:00Z",
+      "lat": 32.8536,
+      "lon": -97.9382,
+      "ef": 1,
+      "km_from_kfws": 67.1,
+      "source": "spc"
+    }
+  ],
+  "quiet_controls": [
+    {
+      "id": "quiet-2021-01-21T03",
+      "time": "2021-01-21T03:00:00Z",
+      "note": "quiet day (no SV/TO/FF/MA VTEC for FWD within +-1 day), seed=42"
+    },
+    {
+      "id": "quiet-2021-02-04T09",
+      "time": "2021-02-04T09:00:00Z",
+      "note": "quiet day (no SV/TO/FF/MA VTEC for FWD within +-1 day), seed=42"
+    },
+    {
+      "id": "quiet-2021-07-08T15",
+      "time": "2021-07-08T15:00:00Z",
+      "note": "quiet day (no SV/TO/FF/MA VTEC for FWD within +-1 day), seed=42"
+    },
+    {
+      "id": "quiet-2021-08-05T21",
+      "time": "2021-08-05T21:00:00Z",
+      "note": "quiet day (no SV/TO/FF/MA VTEC for FWD within +-1 day), seed=42"
+    },
+    {
+      "id": "quiet-2021-09-24T03",
+      "time": "2021-09-24T03:00:00Z",
+      "note": "quiet day (no SV/TO/FF/MA VTEC for FWD within +-1 day), seed=42"
+    },
+    {
+      "id": "quiet-2021-10-04T09",
+      "time": "2021-10-04T09:00:00Z",
+      "note": "quiet day (no SV/TO/FF/MA VTEC for FWD within +-1 day), seed=42"
+    },
+    {
+      "id": "quiet-2021-11-22T15",
+      "time": "2021-11-22T15:00:00Z",
+      "note": "quiet day (no SV/TO/FF/MA VTEC for FWD within +-1 day), seed=42"
+    },
+    {
+      "id": "quiet-2021-12-24T21",
+      "time": "2021-12-24T21:00:00Z",
+      "note": "quiet day (no SV/TO/FF/MA VTEC for FWD within +-1 day), seed=42"
+    },
+    {
+      "id": "quiet-2022-01-29T03",
+      "time": "2022-01-29T03:00:00Z",
+      "note": "quiet day (no SV/TO/FF/MA VTEC for FWD within +-1 day), seed=42"
+    },
+    {
+      "id": "quiet-2022-03-03T15",
+      "time": "2022-03-03T15:00:00Z",
+      "note": "quiet day (no SV/TO/FF/MA VTEC for FWD within +-1 day), seed=42"
+    },
+    {
+      "id": "quiet-2022-04-19T21",
+      "time": "2022-04-19T21:00:00Z",
+      "note": "quiet day (no SV/TO/FF/MA VTEC for FWD within +-1 day), seed=42"
+    },
+    {
+      "id": "quiet-2022-07-01T15",
+      "time": "2022-07-01T15:00:00Z",
+      "note": "quiet day (no SV/TO/FF/MA VTEC for FWD within +-1 day), seed=42"
+    },
+    {
+      "id": "quiet-2022-08-03T21",
+      "time": "2022-08-03T21:00:00Z",
+      "note": "quiet day (no SV/TO/FF/MA VTEC for FWD within +-1 day), seed=42"
+    },
+    {
+      "id": "quiet-2022-10-05T15",
+      "time": "2022-10-05T15:00:00Z",
+      "note": "base control (docs/MRMS_MIGRATION.md \u00a73)"
+    },
+    {
+      "id": "quiet-2022-10-08T09",
+      "time": "2022-10-08T09:00:00Z",
+      "note": "quiet day (no SV/TO/FF/MA VTEC for FWD within +-1 day), seed=42"
+    },
+    {
+      "id": "quiet-2022-11-17T15",
+      "time": "2022-11-17T15:00:00Z",
+      "note": "quiet day (no SV/TO/FF/MA VTEC for FWD within +-1 day), seed=42"
+    },
+    {
+      "id": "quiet-2022-12-20T21",
+      "time": "2022-12-20T21:00:00Z",
+      "note": "quiet day (no SV/TO/FF/MA VTEC for FWD within +-1 day), seed=42"
+    },
+    {
+      "id": "quiet-2023-01-01T03",
+      "time": "2023-01-01T03:00:00Z",
+      "note": "quiet day (no SV/TO/FF/MA VTEC for FWD within +-1 day), seed=42"
+    },
+    {
+      "id": "quiet-2023-02-18T09",
+      "time": "2023-02-18T09:00:00Z",
+      "note": "quiet day (no SV/TO/FF/MA VTEC for FWD within +-1 day), seed=42"
+    },
+    {
+      "id": "quiet-2023-07-18T15",
+      "time": "2023-07-18T15:00:00Z",
+      "note": "quiet day (no SV/TO/FF/MA VTEC for FWD within +-1 day), seed=42"
+    },
+    {
+      "id": "quiet-2023-08-15T21",
+      "time": "2023-08-15T21:00:00Z",
+      "note": "base control (docs/MRMS_MIGRATION.md \u00a73) -- WARNING: does NOT satisfy the quiet rule, kept anyway"
+    },
+    {
+      "id": "quiet-2023-10-15T09",
+      "time": "2023-10-15T09:00:00Z",
+      "note": "quiet day (no SV/TO/FF/MA VTEC for FWD within +-1 day), seed=42"
+    },
+    {
+      "id": "quiet-2023-11-19T15",
+      "time": "2023-11-19T15:00:00Z",
+      "note": "quiet day (no SV/TO/FF/MA VTEC for FWD within +-1 day), seed=42"
+    },
+    {
+      "id": "quiet-2023-12-09T21",
+      "time": "2023-12-09T21:00:00Z",
+      "note": "quiet day (no SV/TO/FF/MA VTEC for FWD within +-1 day), seed=42"
+    },
+    {
+      "id": "quiet-2024-01-20T06",
+      "time": "2024-01-20T06:00:00Z",
+      "note": "base control (docs/MRMS_MIGRATION.md \u00a73)"
+    },
+    {
+      "id": "quiet-2024-01-26T03",
+      "time": "2024-01-26T03:00:00Z",
+      "note": "quiet day (no SV/TO/FF/MA VTEC for FWD within +-1 day), seed=42"
+    },
+    {
+      "id": "quiet-2024-02-28T09",
+      "time": "2024-02-28T09:00:00Z",
+      "note": "quiet day (no SV/TO/FF/MA VTEC for FWD within +-1 day), seed=42"
+    },
+    {
+      "id": "quiet-2024-03-01T15",
+      "time": "2024-03-01T15:00:00Z",
+      "note": "quiet day (no SV/TO/FF/MA VTEC for FWD within +-1 day), seed=42"
+    },
+    {
+      "id": "quiet-2024-04-10T20",
+      "time": "2024-04-10T20:00:00Z",
+      "note": "base control (docs/MRMS_MIGRATION.md \u00a73) -- WARNING: does NOT satisfy the quiet rule, kept anyway"
+    },
+    {
+      "id": "quiet-2024-08-14T21",
+      "time": "2024-08-14T21:00:00Z",
+      "note": "quiet day (no SV/TO/FF/MA VTEC for FWD within +-1 day), seed=42"
+    },
+    {
+      "id": "quiet-2024-09-11T03",
+      "time": "2024-09-11T03:00:00Z",
+      "note": "quiet day (no SV/TO/FF/MA VTEC for FWD within +-1 day), seed=42"
+    },
+    {
+      "id": "quiet-2024-10-09T09",
+      "time": "2024-10-09T09:00:00Z",
+      "note": "quiet day (no SV/TO/FF/MA VTEC for FWD within +-1 day), seed=42"
+    },
+    {
+      "id": "quiet-2024-12-07T21",
+      "time": "2024-12-07T21:00:00Z",
+      "note": "quiet day (no SV/TO/FF/MA VTEC for FWD within +-1 day), seed=42"
+    },
+    {
+      "id": "quiet-2025-02-25T09",
+      "time": "2025-02-25T09:00:00Z",
+      "note": "quiet day (no SV/TO/FF/MA VTEC for FWD within +-1 day), seed=42"
+    },
+    {
+      "id": "quiet-2025-09-28T03",
+      "time": "2025-09-28T03:00:00Z",
+      "note": "quiet day (no SV/TO/FF/MA VTEC for FWD within +-1 day), seed=42"
+    },
+    {
+      "id": "quiet-2025-10-12T09",
+      "time": "2025-10-12T09:00:00Z",
+      "note": "quiet day (no SV/TO/FF/MA VTEC for FWD within +-1 day), seed=42"
+    }
+  ],
+  "svw_controls": [
+    {
+      "id": "svw-2021-01-25T1206",
+      "time": "2021-01-25T12:16:00Z",
+      "warning_id": "FWD-SVW-3-2021",
+      "note": "issuance+10min; centroid 75.6 km from KFWS, nearest town Mesquite; product 202101251206-KFWD-WUUS54-SVRFWD"
+    },
+    {
+      "id": "svw-2021-04-09T2323",
+      "time": "2021-04-09T23:33:00Z",
+      "warning_id": "FWD-SVW-59-2021",
+      "note": "issuance+10min; centroid 59.3 km from KFWS, nearest town Waxahachie; product 202104092323-KFWD-WUUS54-SVRFWD"
+    },
+    {
+      "id": "svw-2021-05-11T0117",
+      "time": "2021-05-11T01:27:00Z",
+      "warning_id": "FWD-SVW-164-2021",
+      "note": "issuance+10min; centroid 97.1 km from KFWS, nearest town Stephenville; product 202105110117-KFWD-WUUS54-SVRFWD"
+    },
+    {
+      "id": "svw-2021-07-27T2202",
+      "time": "2021-07-27T22:12:00Z",
+      "warning_id": "FWD-SVW-208-2021",
+      "note": "issuance+10min; centroid 79.4 km from KFWS, nearest town Decatur; product 202107272202-KFWD-WUUS54-SVRFWD"
+    },
+    {
+      "id": "svw-2021-10-27T0644",
+      "time": "2021-10-27T06:54:00Z",
+      "warning_id": "FWD-SVW-257-2021",
+      "note": "issuance+10min; centroid 77.2 km from KFWS, nearest town Decatur; product 202110270644-KFWD-WUUS54-SVRFWD"
+    },
+    {
+      "id": "svw-2022-05-21T2205",
+      "time": "2022-05-21T22:15:00Z",
+      "warning_id": "FWD-SVW-162-2022",
+      "note": "issuance+10min; centroid 44.6 km from KFWS, nearest town Cleburne; product 202205212205-KFWD-WUUS54-SVRFWD"
+    },
+    {
+      "id": "svw-2022-08-10T1904",
+      "time": "2022-08-10T19:14:00Z",
+      "warning_id": "FWD-SVW-193-2022",
+      "note": "issuance+10min; centroid 57.9 km from KFWS, nearest town Waxahachie; product 202208101904-KFWD-WUUS54-SVRFWD"
+    },
+    {
+      "id": "svw-2022-09-25T2118",
+      "time": "2022-09-25T21:28:00Z",
+      "warning_id": "FWD-SVW-217-2022",
+      "note": "issuance+10min; centroid 63.6 km from KFWS, nearest town Plano; product 202209252118-KFWD-WUUS54-SVRFWD"
+    },
+    {
+      "id": "svw-2023-04-04T0017",
+      "time": "2023-04-04T00:27:00Z",
+      "warning_id": "FWD-SVW-135-2023",
+      "note": "issuance+10min; centroid 63.6 km from KFWS, nearest town Cleburne; product 202304040017-KFWD-WUUS54-SVRFWD"
+    },
+    {
+      "id": "svw-2023-05-19T1900",
+      "time": "2023-05-19T19:10:00Z",
+      "warning_id": "FWD-SVW-272-2023",
+      "note": "issuance+10min; centroid 98.3 km from KFWS, nearest town McKinney; product 202305191900-KFWD-WUUS54-SVRFWD"
+    },
+    {
+      "id": "svw-2023-06-13T0135",
+      "time": "2023-06-13T01:45:00Z",
+      "warning_id": "FWD-SVW-365-2023",
+      "note": "issuance+10min; centroid 90.5 km from KFWS, nearest town Stephenville; product 202306130135-KFWD-WUUS54-SVRFWD"
+    },
+    {
+      "id": "svw-2023-07-10T2357",
+      "time": "2023-07-11T00:07:00Z",
+      "warning_id": "FWD-SVW-479-2023",
+      "note": "issuance+10min; centroid 55.4 km from KFWS, nearest town Granbury; product 202307102357-KFWD-WUUS54-SVRFWD"
+    },
+    {
+      "id": "svw-2023-09-21T2309",
+      "time": "2023-09-21T23:19:00Z",
+      "warning_id": "FWD-SVW-521-2023",
+      "note": "issuance+10min; centroid 69.3 km from KFWS, nearest town Lewisville; product 202309212309-KFWD-WUUS54-SVRFWD"
+    },
+    {
+      "id": "svw-2024-04-08T2337",
+      "time": "2024-04-08T23:47:00Z",
+      "warning_id": "FWD-SVW-53-2024",
+      "note": "issuance+10min; centroid 78.1 km from KFWS, nearest town Corsicana; product 202404082337-KFWD-WUUS54-SVRFWD"
+    },
+    {
+      "id": "svw-2024-05-27T2115",
+      "time": "2024-05-27T21:25:00Z",
+      "warning_id": "FWD-SVW-292-2024",
+      "note": "issuance+10min; centroid 56.6 km from KFWS, nearest town Dallas; product 202405272115-KFWD-WUUS54-SVRFWD"
+    },
+    {
+      "id": "svw-2024-06-05T0715",
+      "time": "2024-06-05T07:25:00Z",
+      "warning_id": "FWD-SVW-367-2024",
+      "note": "issuance+10min; centroid 91.8 km from KFWS, nearest town Frisco; product 202406050715-KFWD-WUUS54-SVRFWD"
+    },
+    {
+      "id": "svw-2024-11-04T1747",
+      "time": "2024-11-04T17:57:00Z",
+      "warning_id": "FWD-SVW-397-2024",
+      "note": "issuance+10min; centroid 90.0 km from KFWS, nearest town Decatur; product 202411041747-KFWD-WUUS54-SVRFWD"
+    },
+    {
+      "id": "svw-2024-12-26T1626",
+      "time": "2024-12-26T16:36:00Z",
+      "warning_id": "FWD-SVW-433-2024",
+      "note": "issuance+10min; centroid 86.5 km from KFWS, nearest town Corsicana; product 202412261626-KFWD-WUUS54-SVRFWD"
+    },
+    {
+      "id": "svw-2025-03-25T2227",
+      "time": "2025-03-25T22:37:00Z",
+      "warning_id": "FWD-SVW-44-2025",
+      "note": "issuance+10min; centroid 22.8 km from KFWS, nearest town Cleburne; product 202503252227-KFWD-WUUS54-SVRFWD"
+    },
+    {
+      "id": "svw-2025-05-23T0042",
+      "time": "2025-05-23T00:52:00Z",
+      "warning_id": "FWD-SVW-294-2025",
+      "note": "issuance+10min; centroid 94.9 km from KFWS, nearest town Mineral Wells; product 202505230042-KFWD-WUUS54-SVRFWD"
+    },
+    {
+      "id": "svw-2025-08-03T1803",
+      "time": "2025-08-03T18:13:00Z",
+      "warning_id": "FWD-SVW-422-2025",
+      "note": "issuance+10min; centroid 49.9 km from KFWS, nearest town Irving; product 202508031803-KFWD-WUUS54-SVRFWD"
+    },
+    {
+      "id": "svw-2025-09-22T0042",
+      "time": "2025-09-22T00:52:00Z",
+      "warning_id": "FWD-SVW-456-2025",
+      "note": "issuance+10min; centroid 98.0 km from KFWS, nearest town Stephenville; product 202509220042-KFWD-WUUS54-SVRFWD"
+    }
+  ]
+}

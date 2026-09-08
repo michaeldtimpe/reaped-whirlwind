@@ -50,7 +50,8 @@ independent; nothing in the alert path changes except the annotation text.
 - **Range artifact.** LLSD shear "breaks down within 5 km of a radar site." KFWS
   (32.5728, -97.3031) is inside our domain — mask a 5 km disc around KFWS. Other WSR-88Ds
   (KGRK/KDYX/KFDR/KTLX/KSRX) are all >100 km away; verify this in Phase 0 and re-check only if
-  the domain radius ever grows.
+  the domain radius ever grows. Note: the 5 km disc covers Burleson's centre (3.8 km from KFWS),
+  so a max cell cannot be reported "near Burleson" — see the corrected §2.2 example.
 - **Interpretation.** No official NSSL "tornadic" threshold exists. Case literature cites
   ~0.010 s⁻¹ in 0-2 km AzShear as strong low-level rotation, with tornadic cases ramping
   0.008 → 0.012+. This is a diagnostic, not a tornado observation.
@@ -119,12 +120,14 @@ fetch of `RadarQualityIndex` to prove coverage — deferred to Phase 5 if the si
 misleads.
 
 **Dockerfile.** `python:3.12-slim`, `pip install flask requests numpy eccodes` — no torch. Target
-< 300 MB image, well under the 300 s kappa relay build cap (see CLAUDE.md "kappa ops"). `mem_limit
-512m` (a full CONUS field is 7000×3500 float64 ≈ 200 MB transiently at decode; convert to float32
-and slice to the domain immediately).
+< 300 MB image, well under the 300 s kappa relay build cap (see CLAUDE.md "kappa ops"). The grid
+is 14000×7000 = 98 M cells; eccodes returns float64 (784 MB), narrowed at once to float32
+(392 MB), peak ~1.2 GB during decode; eccodes has no partial-field read so the grid cannot be
+cropped before decode. `mem_limit 1536m` (kappa has the RAM; the CNN inference container was
+1 g). Decodes must be serial — never decode two products concurrently in the service.
 
-**Env.** `POLL_INTERVAL`, `MAX_SCORE_AGE_SECONDS`, `ROTATION_THRESHOLD` (s⁻¹, default 0.010
-pending Phase 1), `DOMAIN_RADIUS_KM`, `KFWS_LAT`/`KFWS_LON` (from `common.nws`), `STATUS_PATH`,
+**Env.** `POLL_INTERVAL`, `MAX_SCORE_AGE_SECONDS`, `ROTATION_THRESHOLD` (s⁻¹, default 0.015 —
+Phase 1 result), `DOMAIN_RADIUS_KM`, `KFWS_LAT`/`KFWS_LON` (from `common.nws`), `STATUS_PATH`,
 `ROTATION_LOG_PATH`, `NCEP_BASE_URL`, `S3_BASE_URL`, `ROTATION_TRACK`, `PORT`.
 
 ### 2.2 Alerting changes (`services/alerting/alert_service.py`)
@@ -138,7 +141,7 @@ pending Phase 1), `DOMAIN_RADIUS_KM`, `KFWS_LAT`/`KFWS_LON` (from `common.nws`),
   override, same as today (line 84).
 - `_tornado_model_readout()` (line 359) rewritten: header "RADAR ROTATION READOUT (NOAA MRMS,
   experimental annotation)"; body lines: max 0-2 km azimuthal shear (s⁻¹) vs threshold, valid
-  time + age, location (e.g. "0.0121 s⁻¹ near Burleson, 18 km SSW of KFWS"), 30-min track max,
+  time + age, location (e.g. "0.0200 s⁻¹ near Crowley, 14 km SW of KFWS"), 30-min track max,
   and — new — whether the strongest cell lies inside the warning polygon. Alerting already has
   the NWS alert geometry; add a ~20-line pure-Python ray-cast point-in-polygon to `common/geo.py`
   (no shapely dependency). If the polygon is missing (some alerts use zones instead), say
@@ -158,7 +161,7 @@ pending Phase 1), `DOMAIN_RADIUS_KM`, `KFWS_LAT`/`KFWS_LON` (from `common.nws`),
 
 - Add a `rotation` service to `docker-compose.yml` (build `./services/rotation`, port 9010;
   mounts: code `:ro`, `common` `:ro` at `/srv/reaped/common`,
-  `/volume1/docker/service-status:/status:rw`, `rotation-logs:/logs:rw`; `mem_limit 512m`;
+  `/volume1/docker/service-status:/status:rw`, `rotation-logs:/logs:rw`; `mem_limit 1536m`;
   `restart: unless-stopped`; healthcheck `curl /health`).
 - Alerting: add `ANNOTATION_STATUS_PATH=/status/rotation_status.json`.
 - Inference (CNN): DECISION — move it under `profiles: ["cnn"]` so it is not started by default
@@ -219,8 +222,8 @@ shadow (spring 2027) per the ROADMAP as written.
 
 | Phase | Deliverable | Acceptance | Proof command |
 |---|---|---|---|
-| **0 — Spike** (half a day, scratch script only) | Fetch the live latest file + the Crowley 2022-04-05T03:40Z archive file from S3; decode; print max in the 100 km domain and its location. Confirm grid metadata (Ni, Nj, di, dj, first lat/lon, scan order). Confirm no other WSR-88D inside 100 km. | Archive case shows ≥ ~0.008 s⁻¹ within ~20 km of Burleson; live quiet sky shows ~0 | scratch script output |
-| **1 — Backtest + threshold** (1-2 days, needs network) | `services/rotation/rotation_core.py` (pure functions: decode, slice, mask, compute_readout) + `replay.py` + extended case set | S1, S2, S3, S5 pass | `replay.py` table, pasted into this doc's "Results" section |
+| **0 — Spike** (half a day, scratch script only) | **DONE 2026-09-07** — Fetch the live latest file + the Crowley 2022-04-05T03:40Z archive file from S3; decode; print max in the 100 km domain and its location. Confirm grid metadata (Ni, Nj, di, dj, first lat/lon, scan order). Confirm no other WSR-88D inside 100 km. | Archive case shows ≥ ~0.008 s⁻¹ within ~20 km of Burleson; live quiet sky shows ~0 | scratch script output |
+| **1 — Backtest + threshold** (1-2 days, needs network) | **DONE 2026-09-07** — `services/rotation/rotation_core.py` (pure functions: decode, slice, mask, compute_readout) + `replay.py` + extended case set; files: `services/rotation/{rotation_core,mrms_fetch,replay,build_cases}.py`, `replay_cases.json`, `common/places.py`, `tests/test_rotation_core.py` | S1, S2, S3, S5 pass | `replay.py` table, pasted into this doc's "Results" section |
 | **2 — Service + tests + compose** (1-2 days) | `rotation_service.py`, Dockerfile, compose block, `tests/test_rotation.py`, dashboard registration | `scripts/test.sh` green; `docker-compose -p reaped-whirlwind up -d --build rotation` on kappa; `curl kappa:9010/health` status `running`, `last_score_time` within 5 min of now; JSONL growing every 2 min | `scripts/test.sh`; `curl kappa:9010/health` |
 | **3 — Shadow** (≥2 weeks, calendar; no code) | rotation service running, no cutover | zero `error` status cycles longer than 15 min not attributable to NCEP; rotation JSONL compared against any NWS convective warnings in the alerting decision log | manual log comparison |
 | **4 — Alerting integration + cutover** (1 day; the code can be written and tested during Phase 3, only the cutover waits) | `alert_service.py` changes, `common/geo.py`, `common/places.py`, tests, dry-run emails | `--test-email --dry-run --event "Tornado Warning"` and with `MODEL_ANNOTATION=on` both correct; then set `ANNOTATION_STATUS_PATH` + `MODEL_ANNOTATION=on` in `.env` on kappa (edit in place per `docs/DEPLOY.md`, never chmod), restart alerting, move inference to the `cnn` profile. Update CLAUDE.md status block, `docs/ARCHITECTURE.md`, `docs/DEPLOY.md`, `docs/MODEL_CARD.md` "Superseded", `docs/ROADMAP.md` | dry-run + live email test |
@@ -252,9 +255,85 @@ values are small integers as floats (17.0 → 0.017 s⁻¹); no 9999 sentinel ap
 `io.BytesIO` fails. The 30-min RotationTrack max at 03:40Z sat 89 km NNE, not at Burleson —
 confirms showing both products rather than picking one.
 
-### Phase 1 — backtest + threshold
+### Phase 1 — backtest + threshold (2026-09-07): PASS at 0.015 s⁻¹
 
-_Pending. Paste the `replay.py` table and the chosen threshold here._
+Case set: 33 EF1+ tornadoes within 100 km of KFWS 2020-10-14..2025 from the SPC CSV (all 5 base
+cases matched SPC rows exactly), 36 quiet controls (days with no FWD convective VTEC on D-1/D/D+1;
+two of the four legacy `replay_smoke.py` controls, `2023-08-15T21Z` and `2024-04-10T20Z`, fail
+that rule and are kept but flagged), 22 severe-thunderstorm-warning controls (FWD SV.W polygons
+within 100 km on days with no tornado within 150 km, scored at issuance+10 min). 388 scans, 349
+files, all from S3. Reproduce with `services/rotation/build_cases.py` then
+`services/rotation/replay.py`. Full per-event table and quiet-control maxima live in
+`data/mrms-replay/replay_report.md` (gitignored, regenerable).
+
+#### S1 — quiet controls at or above threshold (target 0)
+
+| threshold | controls >= thr | N | verdict |
+|---|---|---|---|
+| 0.006 | 7 | 36 | FAIL |
+| 0.008 | 3 | 36 | FAIL |
+| 0.010 | 0 | 36 | PASS |
+| 0.012 | 0 | 36 | PASS |
+| 0.015 | 0 | 36 | PASS |
+
+#### S2 — positives detected (target >= 60 % of events)
+
+| threshold | events >= thr | per-event | tornado-time scans >= thr | per-scan | verdict |
+|---|---|---|---|---|---|
+| 0.006 | 33/33 | 100 % | 162/166 | 98 % | PASS |
+| 0.008 | 32/33 | 97 % | 160/166 | 96 % | PASS |
+| 0.010 | 31/33 | 94 % | 153/166 | 92 % | PASS |
+| 0.012 | 30/33 | 91 % | 140/166 | 84 % | PASS |
+| 0.015 | 27/33 | 82 % | 101/166 | 61 % | PASS |
+
+#### S3 — severe-thunderstorm-warning controls at or above threshold (target <= 20 %)
+
+| threshold | controls >= thr | N | fraction | verdict |
+|---|---|---|---|---|
+| 0.006 | 19 | 22 | 86 % | FAIL |
+| 0.008 | 15 | 22 | 68 % | FAIL |
+| 0.010 | 10 | 22 | 45 % | FAIL |
+| 0.012 | 6 | 22 | 27 % | FAIL |
+| 0.015 | 3 | 22 | 14 % | PASS |
+
+#### S5 — scan-to-scan stability (target: median |delta| <= 0.002 s^-1)
+
+Pooled over 297 steps across 33 cases: median |Δ| **0.0010**, max |Δ| **0.0200**.
+
+Verdict: **PASS** (threshold-free — S5 does not depend on the alarm threshold)
+
+#### S6 — honest hit rate over every scan fetched
+
+| threshold | alarms | tornadic alarms | hit rate |
+|---|---|---|---|
+| 0.006 | 356/388 | 183 | 51 % |
+| 0.008 | 348/388 | 183 | 53 % |
+| 0.010 | 333/388 | 179 | 54 % |
+| 0.012 | 314/388 | 169 | 54 % |
+| 0.015 | 266/388 | 143 | 54 % |
+
+#### Verdict
+
+| threshold | S1 | S2 | S3 | S5 | overall |
+|---|---|---|---|---|---|
+| 0.006 | FAIL | PASS | FAIL | PASS | FAIL |
+| 0.008 | FAIL | PASS | FAIL | PASS | FAIL |
+| 0.010 | PASS | PASS | FAIL | PASS | FAIL |
+| 0.012 | PASS | PASS | FAIL | PASS | FAIL |
+| 0.015 | PASS | PASS | PASS | PASS | **PASS** |
+
+**Chosen threshold: 0.015 s⁻¹.** S3 (severe-but-not-tornadic days) is the binding criterion, not
+quiet sky — at the literature's 0.010, 45 % of SV.W days exceed it somewhere in the 100 km
+domain, so 0.010 is a detection number, not a discrimination number. At 0.015 the SV.W
+false-alarm rate is 14 % and per-event tornado recall is 82 % (per-scan 61 %, right at the S2
+bar — a thin margin). S6 hit rate is flat at 51-54 % across thresholds: the domain max
+barely ranks; what separates positives is *where* the max is (the two misses at 0.010, Garland
+2021-05-16 and Terrell 2022-03-30, had healthy domain maxima from storms 63 and 95 km away).
+Therefore the Phase 4 warning-polygon check is load-bearing, not polish. S4 is n/a (this is the
+baseline).
+
+Negative values exist in the raw field (anticyclonic shear); the readout uses the positive max
+only.
 
 ## 5. Risks and open questions
 
@@ -267,6 +346,8 @@ _Pending. Paste the `replay.py` table and the chosen threshold here._
 | AzShear noise from gust fronts / heartbeat echoes | show `RotationTrack30min` alongside; annotation wording is diagnostic, never the alert |
 | IEM MRMS archive unverified for AzShear | use S3 instead |
 | Cresson 2020 case lost to archive start (2020-10-14) | dropped from the case set, noted above |
+| Domain-max threshold alone barely discriminates (S6 flat ~53 %) | polygon check in Phase 4; readout shows location + distance, not just a number |
+| Legacy quiet controls 2023-08-15 / 2024-04-10 are adjacent to severe days | flagged in replay_cases.json; kept for continuity with replay_smoke |
 
 ## 6. What does not change
 

@@ -1,0 +1,10 @@
+# Rotation annotation service (docs/MRMS_MIGRATION.md §2.1). No torch — this
+# service decodes an operational NOAA product, it does not run a model.
+flask==3.0.3
+requests==2.32.3
+numpy==1.26.4
+
+# GRIB2 decode. The pip wheel pulls eccodeslib with the C library bundled, so
+# the image needs no apt libeccodes0. 2.48.0 is the version Phase 0 verified
+# (macOS arm64 and the manylinux wheel kappa will pull are the same release).
+eccodes==2.48.0
