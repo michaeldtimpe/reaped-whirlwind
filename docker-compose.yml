@@ -161,6 +161,48 @@ services:
       retries: 3
       start_period: 30s
 
+  # ---- Part C: MRMS rotation readout (experimental annotation) ----
+  # Every 2 min: fetch MRMS MergedAzShear_0-2kmAGL and RotationTrack30min from NCEP/S3,
+  # decode, and compute max azimuthal shear + top cells in the 100 km DFW domain.
+  # Writes /status/rotation_status.json (last score only) plus per-cycle lines to
+  # /logs/rotation-YYYYMM.jsonl. Does NOT alert — the alerting service consumes
+  # the readout as a diagnostic annotation when an NWS Tornado Warning is active.
+  # Replaces the withdrawn CNN (models/v1) with an operational NOAA product.
+  # See docs/MRMS_MIGRATION.md.
+  rotation:
+    build: ./services/rotation
+    image: reaped-whirlwind-rotation
+    container_name: rotation-service
+    restart: unless-stopped
+    environment:
+      - TZ=${TZ:-America/Chicago}
+      - PUID=${PUID:-106808}
+      - PGID=${PGID:-106808}
+      - PORT=9010
+      - POLL_INTERVAL=${ROTATION_POLL_INTERVAL:-120}
+      - MAX_SCORE_AGE_SECONDS=${ROTATION_MAX_SCORE_AGE_SECONDS:-900}
+      - ROTATION_THRESHOLD=${ROTATION_THRESHOLD:-0.015}
+      - DOMAIN_RADIUS_KM=${DOMAIN_RADIUS_KM:-100}
+      - ROTATION_TRACK=${ROTATION_TRACK:-1}
+      - KFWS_LAT=${KFWS_LAT:-32.5728}
+      - KFWS_LON=${KFWS_LON:--97.3031}
+      - STATUS_PATH=/status/rotation_status.json
+      - ROTATION_LOG_PATH=/logs/rotation.jsonl
+    ports:
+      - "9010:9010"
+    volumes:
+      - ./services/rotation:/app:ro
+      - ./common:/srv/reaped/common:ro  # shared status/nws helpers
+      - /volume1/docker/service-status:/status:rw
+      - /volume1/docker/rotation-logs:/logs:rw
+    mem_limit: 1536m
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9010/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
   # ---- Part C: NWS-gated multi-event alerting (experimental annotation) ----
   # Every 5 min: fetch active NWS alerts for KFWS, filter to ALLOWED_EVENTS
   # (warnings only by default), email/SMS each unseen one. Tornado Warning

@@ -53,6 +53,12 @@ SERVICES = {
         "status_file": "inference_status.json",
         "containers": ["inference-service"],
     },
+    "rotation-service": {
+        "label": "Rotation Readout (MRMS)",
+        "service": "rotation",
+        "status_file": "rotation_status.json",
+        "containers": ["rotation-service"],
+    },
     "alerting-service": {
         "label": "Alerting (NWS-gated)",
         "service": "alerting",
