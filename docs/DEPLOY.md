@@ -19,6 +19,10 @@ docker-compose up -d --build
 ```
 `.env` holds secrets (SMTP) and is **gitignored** — recreate it from `.env.example` on a fresh
 checkout. The data dirs under `/volume1/docker/...` are bind-mounted and must already exist.
+**Any new host bind-mount directory a service adds is not auto-created by Synology** — `mkdir -p`
+it as `magehands` before the first `up`, or the container fails with "Bind mount failed: ... does
+not exist" (hit deploying `rotation`'s `/volume1/docker/rotation-logs`, 2026-09-08); JSONL files
+written into such a dir end up owned by root.
 
 ## Restart vs rebuild  (important)
 Each service's main code + config is **bind-mounted**, so:
@@ -30,6 +34,11 @@ Each service's main code + config is **bind-mounted**, so:
 Prefer `restart`. `up -d --build` mints a new container ID, which Synology **Container Manager**
 surfaces as a stale `<oldid>_<name>` ghost ("doesn't exist, but running") until the Container Manager
 package is restarted. A `restart` avoids that entirely.
+
+A new service (e.g. `rotation`) is deployed with `up -d --build --no-deps rotation` — `--no-deps`
+keeps it from touching unrelated containers. If it changes the dashboard's `SERVICES` dict, follow
+with `docker restart pipeline-dashboard` (bind-mounted code, in-memory dict — needs a restart to
+pick it up).
 
 ## Deploying a change (from the Mac, via the mage-hands relay)
 ```bash

@@ -23,6 +23,10 @@ alert — this model is a research layer and will not beat NWS. It stays permane
   Correctly-timed CNN ≈ mean-reflectivity baseline (PR-AUC 0.543 vs 0.536); still scores a
   near-empty night scan 0.62. Annotation remains withdrawn. `scripts/train_and_gate.sh` is
   the one-shot train + eval + gate; `SKIP_TRAIN=1` re-gates `ml/runs/LATEST`.
+- **MRMS migration in progress (2026-09-08/09)** — see `docs/MRMS_MIGRATION.md`. Phase 1 gate
+  PASS at threshold 0.015 s⁻¹; Phase 2 `rotation` service live on kappa `:9010` in shadow
+  (alerting still reads the withdrawn CNN status file, nothing live changed); Phase 3 shadow
+  review in progress, then Phase 4 alerting cutover.
 - **Part A — DONE & deployed.** The four services (screenshot / processor / weather / dashboard) are
   unified into ONE compose project **`reaped-whirlwind`**, live on the **kappa** NAS at
   `/volume1/docker/reaped-whirlwind` (ports 9005 processor / 9006 weather / 9007 dashboard).
@@ -101,8 +105,8 @@ tuning notes.
 
 ## Repo layout
 ```
-docker-compose.yml         # unified stack (kappa); now 6 services
-services/ screenshot/ processor/ weather/ dashboard/ inference/ alerting/
+docker-compose.yml         # unified stack (kappa); now 7 services
+services/ screenshot/ processor/ weather/ dashboard/ inference/ alerting/ rotation/
 common/                     # shared package: status-file + NWS helpers (KFWS coords, default
                              # event allowlist) — single source of truth, used by inference+alerting
 tests/                      # pytest suite; run via scripts/test.sh
@@ -111,8 +115,9 @@ data-tools/ collect.py iem.py run_collection.sh README.md      # Part B data col
             (iem.py is shared with services/inference)
 ml/ preprocess.py dataset.py model.py train.py evaluate.py run_training.sh
 models/ v1/ {model.pt, manifest.json, run.json, eval.json, MANIFEST.md}  # canonical deploy
-docs/ ARCHITECTURE.md DEPLOY.md DATA.md MODEL_CARD.md RETROSPECTIVE.md ROADMAP.md
-      (ROADMAP.md = the plan + success criteria S1-S7 for making the annotation trustworthy)
+docs/ ARCHITECTURE.md DEPLOY.md DATA.md MODEL_CARD.md RETROSPECTIVE.md ROADMAP.md MRMS_MIGRATION.md
+      (ROADMAP.md = the plan + success criteria S1-S7 for making the annotation trustworthy;
+       MRMS_MIGRATION.md = the CNN → NOAA MRMS azimuthal-shear annotation migration, phased)
 ```
 Data is **not** in the repo: live captures/status are bind-mounted on kappa; training data lives
 only on the analysis machine under `data/` (gitignored) — see "Data retention" above. Secrets

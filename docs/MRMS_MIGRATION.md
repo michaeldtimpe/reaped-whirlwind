@@ -176,6 +176,9 @@ Phase 1 result), `DOMAIN_RADIUS_KM`, `KFWS_LAT`/`KFWS_LON` (from `common.nws`), 
 - Deploy per `docs/DEPLOY.md` (git archive over ssh, throwaway root `docker:cli` for
   `up -d --build`). The rotation image is small enough to build within the 300 s relay cap, but
   still use the nohup+poll pattern out of habit (CLAUDE.md "Relay timeout").
+- A new host bind-mount directory (e.g. `/volume1/docker/rotation-logs`) is not auto-created by
+  Synology on first `up` — `mkdir -p` it as `magehands` beforehand, or `docker start` fails with
+  "Bind mount failed"; see `docs/DEPLOY.md`.
 
 ## 3. Validation: the gate (replaces `replay_smoke.py` for the annotation)
 
@@ -224,8 +227,8 @@ shadow (spring 2027) per the ROADMAP as written.
 |---|---|---|---|
 | **0 — Spike** (half a day, scratch script only) | **DONE 2026-09-07** — Fetch the live latest file + the Crowley 2022-04-05T03:40Z archive file from S3; decode; print max in the 100 km domain and its location. Confirm grid metadata (Ni, Nj, di, dj, first lat/lon, scan order). Confirm no other WSR-88D inside 100 km. | Archive case shows ≥ ~0.008 s⁻¹ within ~20 km of Burleson; live quiet sky shows ~0 | scratch script output |
 | **1 — Backtest + threshold** (1-2 days, needs network) | **DONE 2026-09-07** — `services/rotation/rotation_core.py` (pure functions: decode, slice, mask, compute_readout) + `replay.py` + extended case set; files: `services/rotation/{rotation_core,mrms_fetch,replay,build_cases}.py`, `replay_cases.json`, `common/places.py`, `tests/test_rotation_core.py` | S1, S2, S3, S5 pass | `replay.py` table, pasted into this doc's "Results" section |
-| **2 — Service + tests + compose** (1-2 days) | `rotation_service.py`, Dockerfile, compose block, `tests/test_rotation.py`, dashboard registration | `scripts/test.sh` green; `docker-compose -p reaped-whirlwind up -d --build rotation` on kappa; `curl kappa:9010/health` status `running`, `last_score_time` within 5 min of now; JSONL growing every 2 min | `scripts/test.sh`; `curl kappa:9010/health` |
-| **3 — Shadow** (≥2 weeks, calendar; no code) | rotation service running, no cutover | zero `error` status cycles longer than 15 min not attributable to NCEP; rotation JSONL compared against any NWS convective warnings in the alerting decision log | manual log comparison |
+| **2 — Service + tests + compose** (1-2 days) | **DONE 2026-09-08** — `rotation_service.py`, Dockerfile, compose block, `tests/test_rotation.py`, dashboard registration; deployed to kappa ~12:24Z as commit 76ceb92 (container `rotation-service`, :9010, image `reaped-whirlwind-rotation` 98 MB compressed / 314 MB on disk, `mem_limit 1536m`) via ssh tar transfer + throwaway root `docker:cli` `up -d --build --no-deps rotation`; no other container restarted | `scripts/test.sh` green; `docker-compose -p reaped-whirlwind up -d --build rotation` on kappa; `curl kappa:9010/health` status `running`, `last_score_time` within 5 min of now; JSONL growing every 2 min | `scripts/test.sh`; `curl kappa:9010/health` |
+| **3 — Shadow** (≥2 weeks, calendar; no code) | **IN PROGRESS since 2026-09-08 12:24Z** — rotation service running, no cutover | zero `error` status cycles longer than 15 min not attributable to NCEP; rotation JSONL compared against any NWS convective warnings in the alerting decision log; review every ≥threshold cycle: distance from KFWS, coverage fraction, and whether any NWS convective product was active — if the near-radar cases cluster in 5-10 km, widen `RADAR_EXCLUSION_KM` (Crowley's tornado max was 15 km from KFWS, so 10 km would still keep the Phase 1 result) | manual log comparison |
 | **4 — Alerting integration + cutover** (1 day; the code can be written and tested during Phase 3, only the cutover waits) | `alert_service.py` changes, `common/geo.py`, `common/places.py`, tests, dry-run emails | `--test-email --dry-run --event "Tornado Warning"` and with `MODEL_ANNOTATION=on` both correct; then set `ANNOTATION_STATUS_PATH` + `MODEL_ANNOTATION=on` in `.env` on kappa (edit in place per `docs/DEPLOY.md`, never chmod), restart alerting, move inference to the `cnn` profile. Update CLAUDE.md status block, `docs/ARCHITECTURE.md`, `docs/DEPLOY.md`, `docs/MODEL_CARD.md` "Superseded", `docs/ROADMAP.md` | dry-run + live email test |
 | **5 — Operate** (ongoing) | monthly retrospective (rotation JSONL vs decision JSONL: every Tornado Warning's readout at send time; every readout ≥ threshold and whether a warning existed within 30 min); `/health` alarm if NCEP has returned no new file for >20 min (`fetch_consecutive_failures` counter, same pattern as alerting's `nws_consecutive_failures`); revisit threshold annually | — | monthly retrospective run |
 
@@ -335,6 +338,27 @@ baseline).
 Negative values exist in the raw field (anticyclonic shear); the readout uses the positive max
 only.
 
+### Phase 2 — service on kappa (2026-09-08): DONE
+
+25 h of live operation, `rotation-service` :9010:
+
+| Metric | Value |
+|---|---|
+| Cycles | 724 |
+| `running` / error cycles | 724 / 0 |
+| Fetch failures | 0 |
+| Source | ncep (100 %) |
+| Median cycle time | 6.0 s (decode ~5.1 s for both products, fetch ~0.65 s) |
+| Idle RSS | 112 MiB |
+| `/health` | `status running`, `score_age_seconds` ~180 at the 2-min cadence |
+| Cycles with positive max | 105 / 724 |
+
+Highest reading: 0.017 s⁻¹ at 2026-09-08T19:24Z and 19:26Z, 6.7 km NNW of KFWS ("near Crowley"),
+domain coverage only 0.6-1.1 % nonzero — i.e. at/above the 0.015 threshold from a tiny echo patch
+just outside the 5 km radar-exclusion disc. Whether this was a real small cell or a near-radar
+LLSD artifact is unknown; it is exactly the kind of case the Phase 3 shadow exists to catch. First
+shadow-log finding; see §4 Phase 3 acceptance and §5 Risks.
+
 ## 5. Risks and open questions
 
 | Risk | Mitigation |
@@ -348,6 +372,7 @@ only.
 | Cresson 2020 case lost to archive start (2020-10-14) | dropped from the case set, noted above |
 | Domain-max threshold alone barely discriminates (S6 flat ~53 %) | polygon check in Phase 4; readout shows location + distance, not just a number |
 | Legacy quiet controls 2023-08-15 / 2024-04-10 are adjacent to severe days | flagged in replay_cases.json; kept for continuity with replay_smoke |
+| Near-radar (5-10 km) elevated readings with near-zero coverage | shadow review; candidate to widen the exclusion disc; see Results Phase 2 |
 
 ## 6. What does not change
 
