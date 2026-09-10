@@ -228,8 +228,8 @@ shadow (spring 2027) per the ROADMAP as written.
 | **0 — Spike** (half a day, scratch script only) | **DONE 2026-09-07** — Fetch the live latest file + the Crowley 2022-04-05T03:40Z archive file from S3; decode; print max in the 100 km domain and its location. Confirm grid metadata (Ni, Nj, di, dj, first lat/lon, scan order). Confirm no other WSR-88D inside 100 km. | Archive case shows ≥ ~0.008 s⁻¹ within ~20 km of Burleson; live quiet sky shows ~0 | scratch script output |
 | **1 — Backtest + threshold** (1-2 days, needs network) | **DONE 2026-09-07** — `services/rotation/rotation_core.py` (pure functions: decode, slice, mask, compute_readout) + `replay.py` + extended case set; files: `services/rotation/{rotation_core,mrms_fetch,replay,build_cases}.py`, `replay_cases.json`, `common/places.py`, `tests/test_rotation_core.py` | S1, S2, S3, S5 pass | `replay.py` table, pasted into this doc's "Results" section |
 | **2 — Service + tests + compose** (1-2 days) | **DONE 2026-09-08** — `rotation_service.py`, Dockerfile, compose block, `tests/test_rotation.py`, dashboard registration; deployed to kappa ~12:24Z as commit 76ceb92 (container `rotation-service`, :9010, image `reaped-whirlwind-rotation` 98 MB compressed / 314 MB on disk, `mem_limit 1536m`) via ssh tar transfer + throwaway root `docker:cli` `up -d --build --no-deps rotation`; no other container restarted | `scripts/test.sh` green; `docker-compose -p reaped-whirlwind up -d --build rotation` on kappa; `curl kappa:9010/health` status `running`, `last_score_time` within 5 min of now; JSONL growing every 2 min | `scripts/test.sh`; `curl kappa:9010/health` |
-| **3 — Shadow** (≥2 weeks, calendar; no code) | **IN PROGRESS since 2026-09-08 12:24Z** — rotation service running, no cutover | zero `error` status cycles longer than 15 min not attributable to NCEP; rotation JSONL compared against any NWS convective warnings in the alerting decision log; review every ≥threshold cycle: distance from KFWS, coverage fraction, and whether any NWS convective product was active — if the near-radar cases cluster in 5-10 km, widen `RADAR_EXCLUSION_KM` (Crowley's tornado max was 15 km from KFWS, so 10 km would still keep the Phase 1 result) | manual log comparison |
-| **4 — Alerting integration + cutover** (1 day; the code can be written and tested during Phase 3, only the cutover waits) | `alert_service.py` changes, `common/geo.py`, `common/places.py`, tests, dry-run emails | `--test-email --dry-run --event "Tornado Warning"` and with `MODEL_ANNOTATION=on` both correct; then set `ANNOTATION_STATUS_PATH` + `MODEL_ANNOTATION=on` in `.env` on kappa (edit in place per `docs/DEPLOY.md`, never chmod), restart alerting, move inference to the `cnn` profile. Update CLAUDE.md status block, `docs/ARCHITECTURE.md`, `docs/DEPLOY.md`, `docs/MODEL_CARD.md` "Superseded", `docs/ROADMAP.md` | dry-run + live email test |
+| **3 — Shadow** (≥2 weeks, calendar; no code) | **IN PROGRESS since 2026-09-08 12:24Z** — rotation service running, no cutover; interim review 2026-09-10 below | zero `error` status cycles longer than 15 min not attributable to NCEP; rotation JSONL compared against any NWS convective warnings in the alerting decision log; review every ≥threshold cycle: distance from KFWS, coverage fraction, and whether any NWS convective product was active — if the near-radar cases cluster in 5-10 km, widen `RADAR_EXCLUSION_KM` (Crowley's tornado max was 15 km from KFWS, so 10 km would still keep the Phase 1 result) | manual log comparison |
+| **4 — Alerting integration + cutover** (1 day; the code can be written and tested during Phase 3, only the cutover waits) | **CODE DONE 2026-09-10, cutover pending** — `alert_service.py` changes, `common/geo.py`, `common/places.py`, tests, dry-run emails; see "Phase 4 — code" below for the cutover checklist | `--test-email --dry-run --event "Tornado Warning"` and with `MODEL_ANNOTATION=on` both correct; then set `ANNOTATION_STATUS_PATH` + `MODEL_ANNOTATION=on` in `.env` on kappa (edit in place per `docs/DEPLOY.md`, never chmod), restart alerting, move inference to the `cnn` profile. Update CLAUDE.md status block, `docs/ARCHITECTURE.md`, `docs/DEPLOY.md`, `docs/MODEL_CARD.md` "Superseded", `docs/ROADMAP.md` | dry-run + live email test |
 | **5 — Operate** (ongoing) | monthly retrospective (rotation JSONL vs decision JSONL: every Tornado Warning's readout at send time; every readout ≥ threshold and whether a warning existed within 30 min); `/health` alarm if NCEP has returned no new file for >20 min (`fetch_consecutive_failures` counter, same pattern as alerting's `nws_consecutive_failures`); revisit threshold annually | — | monthly retrospective run |
 
 ## Results
@@ -358,6 +358,84 @@ domain coverage only 0.6-1.1 % nonzero — i.e. at/above the 0.015 threshold fro
 just outside the 5 km radar-exclusion disc. Whether this was a real small cell or a near-radar
 LLSD artifact is unknown; it is exactly the kind of case the Phase 3 shadow exists to catch. First
 shadow-log finding; see §4 Phase 3 acceptance and §5 Risks.
+
+### Phase 3 — shadow, interim review (2026-09-10, 48 h in)
+
+1385 cycles 2026-09-08T12:24Z → 09-10T13:00Z, all `running`; no cycle gap > 5 min.
+
+| Metric | Value |
+|---|---|
+| Source | ncep 1373 / s3 12 |
+| S3 fallbacks | one NCEP slow spell 2026-09-09 16:28–18:30Z (four cycles 93–192 s, over the 60 s deadline; self-healed, no `error` status) |
+| Cycles with positive max | 263 / 1385 |
+| Cycles ≥ 0.015 (threshold) | 4 |
+| NWS products at the KFWS point (alerting decision log) | none in the window |
+
+The ≥threshold cycles:
+
+| Valid (UTC) | max s⁻¹ | location | coverage | note |
+|---|---|---|---|---|
+| 09-08 19:25, 19:27 | 0.017 | 6.7 km NNW of KFWS, near Crowley | 0.6–1.1 % | the Phase 2 near-radar case; two frames then gone |
+| 09-09 21:26, 21:28 | 0.016 | 74.9 km WSW, near Stephenville | 0.06 % | two frames, isolated cell in an afternoon of scattered 0.008–0.014 readings across the western domain |
+| 09-09 23:32 | 0.017 | 38.4 km N, near Keller | 0.04 % | single frame; 0.008 four minutes later 26 km SSE |
+
+Reading: 09-09 was a convective afternoon (19–23Z) with no NWS warning at the KFWS point, and
+the readout crossed threshold three times for one or two 2-min frames each. That is the S6 flat
+hit-rate in live form — the domain max alone is noisy at the threshold, and every exceedance so
+far is a sub-0.1 %-coverage speck. Two consequences carried into Phase 4: (a) the polygon check
+is load-bearing (an exceedance 75 km from the warned polygon must read as OUTSIDE), and (b) the
+readout prints the 30-min track max next to the single-frame value so a one-frame blip is visible
+as such. No exclusion-disc change yet: only one of the four was within 10 km of KFWS. Caveat on
+the "no warnings" comparison: alerting polls the KFWS *point*, so a Severe Thunderstorm Warning
+over Stephenville would not appear in its log — the Phase 5 retrospective should pull the IEM VTEC
+archive for the whole 100 km domain instead.
+
+Shadow continues; earliest cutover per S7 is 2026-09-22, and only after ≥1 Severe Thunderstorm
+Warning day in the log.
+
+### Phase 4 — code (2026-09-10): DONE, cutover pending
+
+Written and tested during the shadow, per the plan; nothing deployed.
+
+- `common/geo.py`: ray-cast point-in-polygon over GeoJSON Polygon/MultiPolygon (holes honoured,
+  edge = inside, malformed/missing geometry → `None`, never `False`). `tests/test_geo.py`.
+- `services/alerting/alert_service.py`: reads `ANNOTATION_STATUS_PATH` (default
+  `/status/rotation_status.json`; `INFERENCE_STATUS_PATH` honoured as a deprecated alias);
+  threshold = `MODEL_RISK_THRESHOLD` env if set, else the status file's `threshold`, else 0.015;
+  `filter_to_allowed_events` keeps the alert `geometry` on `props["_geometry"]`; the Tornado
+  Warning readout is "RADAR ROTATION READOUT (NOAA MRMS, experimental annotation)" with max shear
+  vs threshold, valid time + age, location, polygon INSIDE/OUTSIDE/unavailable, 30-min max, and
+  "no rotation signal in domain (radar coverage unverified)" when coverage is 0; SMS unchanged
+  (state word only); decision JSONL gains `annotation_source` and `max_location_near`; `/health`
+  gains `annotation_status_path` + `annotation_source`. Subject is now `(rotation: <state>)`.
+- `docker-compose.yml`: alerting gets `ANNOTATION_STATUS_PATH`, its `MODEL_RISK_THRESHOLD`
+  default is now empty (file threshold wins); `inference` is under `profiles: ["cnn"]`.
+- The tornado fixture `services/alerting/fixtures/sample_warning.json` now carries a polygon so
+  `--test-email --dry-run` exercises the polygon line.
+- `scripts/test.sh`: 197 passed. Dry-runs checked: elevated (INSIDE), withdrawn, and Severe
+  Thunderstorm Warning (not applicable).
+
+**Cutover checklist (Phase 4, day of):**
+
+1. Gate: Phase 3 acceptance above holds (S7 date passed, ≥1 SV.W day observed, no unexplained
+   `error` cycles); re-read this section's shadow table for anything new.
+2. Deploy code per `docs/DEPLOY.md` (archive over ssh; extract as root via the throwaway
+   `docker:cli`). Back up the live `docker-compose.yml` + `.env` first.
+3. Edit kappa's `.env` in place (python `r+`, never chmod/chown — `docs/DEPLOY.md`):
+   **blank `MODEL_RISK_THRESHOLD=`** (it is `0.8` today, line 40, and would override the file's
+   0.015 → permanently "not elevated"), add `MODEL_ANNOTATION=on`. `ANNOTATION_STATUS_PATH` can
+   stay at the compose default.
+4. `docker-compose -p reaped-whirlwind up -d --no-deps alerting` (compose/env change ⇒ recreate,
+   not restart). Because `inference` is now profile-gated, a plain `up -d` will NOT touch the
+   running `inference-service` container; stop it explicitly once alerting is verified
+   (`docker stop inference-service`), and leave the container for the `--profile cnn` route.
+5. Verify: `curl kappa:9009/health` → `model_annotation: on`, `annotation_source: mrms`,
+   `annotation_status_path: /status/rotation_status.json`; run
+   `--test-email --dry-run --event "Tornado Warning"` inside the container and read the readout;
+   then the live `--test-email --event "Tornado Warning"` to `ALERT_TO`.
+6. Docs: flip CLAUDE.md status block, this table's Phase 4 row, `docs/ROADMAP.md`. Dashboard:
+   the `inference-service` card will show the container stopped — expected; optional polish is
+   to drop it from `SERVICES` or add the rotation card.
 
 ## 5. Risks and open questions
 

@@ -276,32 +276,130 @@ def test_the_bypass_set_is_configurable():
     assert d.action == alert.DEFER_COOL_OFF
 
 
-# ---- model annotation -------------------------------------------------------
+# ---- model annotation (NOAA MRMS rotation readout) ---------------------------
 
-def test_tornado_warning_email_carries_the_numeric_model_readout():
-    subject, body = alert.compose_email(props(), "Tornado Warning",
-                                        "elevated", 0.91, 0.8, 120, 60)
-    assert subject == "Tornado Warning: Tarrant, TX; Dallas, TX (model: elevated)"
-    assert "Score:     0.91" in body
-    assert "Threshold: 0.80" in body
-    assert "EXPERIMENTAL MODEL READOUT" in body
+def rotation_status(score=0.0210, age_s=120, **extra):
+    """A services/rotation status file as the alerting service reads it."""
+    st = {
+        "status": "running",
+        "last_score": score,
+        "last_score_time": alert.utc_iso(NOW - timedelta(seconds=age_s)),
+        "threshold": 0.015,
+        "product": "MergedAzShear_0-2kmAGL",
+        "product_valid_time": alert.utc_iso(NOW - timedelta(seconds=age_s)),
+        "max_location": {"lat": 32.60, "lon": -97.40, "km": 14.0, "bearing": "WSW", "near": "Crowley"},
+        "max_track30": 0.0230,
+        "coverage_nonzero_fraction": 0.012,
+        "cells_ge_threshold": 3,
+    }
+    st.update(extra)
+    return st
+
+
+# A polygon around Crowley (32.60, -97.40) — [lon, lat] like GeoJSON.
+CROWLEY_POLY = {"type": "Polygon", "coordinates": [[[-97.6, 32.4], [-97.2, 32.4],
+                                                     [-97.2, 32.8], [-97.6, 32.8], [-97.6, 32.4]]]}
+DALLAS_POLY  = {"type": "Polygon", "coordinates": [[[-96.9, 32.6], [-96.6, 32.6],
+                                                     [-96.6, 32.9], [-96.9, 32.9], [-96.9, 32.6]]]}
+
+
+def readout(status=None, geometry=CROWLEY_POLY, enabled=True):
+    st = rotation_status() if status is None else status
+    state, score, thr, age = alert.classify_model_state(st, NOW, annotation_enabled=enabled)
+    details = alert.annotation_details(st)
+    return alert.compose_email(props(_geometry=geometry), "Tornado Warning",
+                               state, score, thr, age, details)
+
+
+def test_tornado_warning_email_carries_the_numeric_rotation_readout():
+    subject, body = readout()
+    assert subject == "Tornado Warning: Tarrant, TX; Dallas, TX (rotation: elevated)"
+    assert "Max 0-2 km azimuthal shear: 0.0210 s^-1" in body
+    assert "Threshold: 0.0150 s^-1" in body
+    assert "NOAA MRMS" in body
+    assert "Location:  near Crowley, 14 km WSW of KFWS" in body
+    assert "30-min max: 0.0230 s^-1" in body
+    assert "(120s ago)" in body
     assert "TAKE COVER NOW!" in body          # NWS instruction still relayed verbatim
+    # No anthropomorphic / model language.
+    for banned in ("agrees", "sees", "tornadic", "CNN"):
+        assert banned not in body, banned
+
+
+def test_readout_says_whether_the_cell_is_inside_the_warning_polygon():
+    _, inside = readout(geometry=CROWLEY_POLY)
+    assert "strongest cell INSIDE the warning polygon" in inside
+    _, outside = readout(geometry=DALLAS_POLY)
+    assert "strongest cell OUTSIDE the warning polygon" in outside
+    _, missing = readout(geometry=None)
+    assert "polygon unavailable" in missing
+    assert "INSIDE" not in missing and "OUTSIDE" not in missing
+
+
+def test_zero_coverage_is_stated_instead_of_a_location():
+    st = rotation_status(score=0.0, max_location=None, coverage_nonzero_fraction=0.0, max_track30=0.0)
+    _, body = readout(st)
+    assert "NOT ELEVATED" in body
+    assert "no rotation signal in domain (radar coverage unverified)" in body
+    assert "Location:" not in body and "Polygon:" not in body
+
+
+def test_threshold_comes_from_the_status_file(monkeypatch):
+    monkeypatch.setattr(alert, "THRESHOLD_OVERRIDE", None)
+    st = rotation_status(score=0.0120, threshold=0.010)
+    state, _, thr, _ = alert.classify_model_state(st, NOW, annotation_enabled=True)
+    assert (state, thr) == ("elevated", 0.010)
+    st = rotation_status(score=0.0120, threshold=0.015)
+    state, _, thr, _ = alert.classify_model_state(st, NOW, annotation_enabled=True)
+    assert (state, thr) == ("not elevated", 0.015)
+
+
+def test_threshold_env_override_wins(monkeypatch):
+    monkeypatch.setattr(alert, "THRESHOLD_OVERRIDE", 0.030)
+    state, _, thr, _ = alert.classify_model_state(rotation_status(score=0.0210), NOW,
+                                                  annotation_enabled=True)
+    assert (state, thr) == ("not elevated", 0.030)
+
+
+def test_threshold_falls_back_when_the_file_lacks_it(monkeypatch):
+    monkeypatch.setattr(alert, "THRESHOLD_OVERRIDE", None)
+    st = rotation_status(); del st["threshold"]
+    assert alert.effective_threshold(st) == alert.DEFAULT_THRESHOLD
+    assert alert.effective_threshold(None) == alert.DEFAULT_THRESHOLD
 
 
 def test_non_tornado_email_shows_no_score_at_all():
+    details = alert.annotation_details(rotation_status())
     subject, body = alert.compose_email(props(event="Flood Warning"), "Flood Warning",
-                                        "elevated", 0.91, 0.8, 120, 60)
+                                        "elevated", 0.0210, 0.015, 120, details)
     assert subject == "Flood Warning: Tarrant, TX; Dallas, TX"
-    assert "model" not in subject
-    assert "0.91" not in body
+    assert "rotation" not in subject
+    assert "0.0210" not in body and "Crowley" not in body
     assert "not applicable" in body
     assert "does not assess this event type" in body
 
 
-def test_unavailable_model_state_is_stated_not_hidden():
-    _, body = alert.compose_email(props(), "Tornado Warning", "unavailable", None, 0.8, None, None)
+def test_unavailable_state_is_stated_not_hidden():
+    _, body = alert.compose_email(props(), "Tornado Warning", "unavailable", None, 0.015, None, None)
     assert "UNAVAILABLE" in body
-    assert "Model readout suppressed" in body
+    assert "Rotation readout suppressed" in body
+    assert "Location:" not in body
+
+
+def test_stale_frame_is_unavailable_with_the_age_shown():
+    st = rotation_status(age_s=alert.MAX_SCORE_AGE + 60)
+    state, score, thr, age = alert.classify_model_state(st, NOW, annotation_enabled=True)
+    assert state == "unavailable" and score == 0.0210
+    _, body = alert.compose_email(props(), "Tornado Warning", state, score, thr, age,
+                                  alert.annotation_details(st))
+    assert f"{age}s old" in body and "suppressed" in body
+
+
+def test_filter_keeps_the_alert_polygon_for_the_readout():
+    feats = [{"properties": props(), "geometry": CROWLEY_POLY}, {"properties": props(alert_id="z")}]
+    kept = alert.filter_to_allowed_events(feats, NOW)
+    assert kept[0]["_geometry"] == CROWLEY_POLY
+    assert kept[1]["_geometry"] is None
 
 
 @pytest.mark.parametrize("event", sorted(alert.ALLOWED_EVENTS))
@@ -329,13 +427,13 @@ def test_sms_annotates_only_tornado_warnings():
 # ---- MODEL_ANNOTATION=off: the readout is withdrawn, never scored ------------
 
 def test_withdrawn_annotation_reports_no_score_anywhere():
-    infer = {"status": "running", "last_score": 0.97,
-             "last_score_time": NOW.strftime("%Y-%m-%dT%H:%M:%SZ")}
-    state, score, thr, age = alert.classify_model_state(infer, NOW, annotation_enabled=False)
+    st = rotation_status(score=0.0970)
+    state, score, thr, age = alert.classify_model_state(st, NOW, annotation_enabled=False)
     assert (state, score, age) == ("withdrawn", None, None)
-    subj, body = alert.compose_email(props(), "Tornado Warning", state, score, thr, age, 120)
+    subj, body = alert.compose_email(props(_geometry=CROWLEY_POLY), "Tornado Warning",
+                                     state, score, thr, age, alert.annotation_details(st))
     assert "withdrawn" in subj and "WITHDRAWN" in body
-    assert "0.97" not in body and "Score:" not in body
+    assert "0.097" not in body and "azimuthal shear:" not in body and "Crowley" not in body
     assert "Heed" in body or "NWS" in body
     ssubj, sbody = alert.compose_sms(props(), "Tornado Warning", state, score, thr)
     assert "model" not in ssubj.lower() and "Model" not in sbody
@@ -343,10 +441,9 @@ def test_withdrawn_annotation_reports_no_score_anywhere():
 
 
 def test_annotation_on_still_scores():
-    infer = {"status": "running", "last_score": 0.97,
-             "last_score_time": NOW.strftime("%Y-%m-%dT%H:%M:%SZ")}
-    state, score, _, _ = alert.classify_model_state(infer, NOW, annotation_enabled=True)
-    assert (state, score) == ("elevated", 0.97)
+    state, score, _, _ = alert.classify_model_state(rotation_status(score=0.0970), NOW,
+                                                    annotation_enabled=True)
+    assert (state, score) == ("elevated", 0.0970)
 
 
 # ---- run_cycle wiring (still offline) ---------------------------------------
@@ -356,7 +453,7 @@ def cycle(tmp_path, monkeypatch):
     """run_cycle with the NWS fetch and SMTP stubbed; ledger/status in tmp_path."""
     monkeypatch.setattr(alert, "ALERTS_SENT_PATH", tmp_path / "alerts_sent.json")
     monkeypatch.setattr(alert, "STATUS_PATH", tmp_path / "alerting_status.json")
-    monkeypatch.setattr(alert, "INFERENCE_STATUS", tmp_path / "inference_status.json")
+    monkeypatch.setattr(alert, "ANNOTATION_STATUS", tmp_path / "rotation_status.json")
     monkeypatch.setattr(alert, "DECISION_LOG_PATH", tmp_path / "logs" / "decisions.jsonl")
     monkeypatch.setattr(alert, "ALERT_TO_FULL", ["ops@example.com"])
     monkeypatch.setattr(alert, "ALERT_TO_SMS", ["5555555555@txt.example.net"])
@@ -457,8 +554,27 @@ def test_a_send_is_recorded_in_the_decision_log(cycle, tmp_path):
     assert row["alert_id"] == "urn:oid:2.49.0.1.840.0.abc"
     assert row["recipients_ok"] == ["ops@example.com", "5555555555@txt.example.net"]
     assert row["recipients_failed"] == []
-    assert row["model_state"] == "unavailable"      # no inference status file
+    assert row["model_state"] == "unavailable"      # no rotation status file
+    assert row["annotation_source"] is None and row["max_location_near"] is None
     assert row["ts"].endswith("Z")
+
+
+def test_a_live_rotation_status_reaches_the_email_and_the_decision_log(cycle, tmp_path, monkeypatch):
+    monkeypatch.setattr(alert, "MODEL_ANNOTATION", True)
+    monkeypatch.setattr(alert, "THRESHOLD_OVERRIDE", None)
+    now = datetime.now(timezone.utc)
+    st = rotation_status()
+    st["last_score_time"] = st["product_valid_time"] = alert.utc_iso(now - timedelta(seconds=90))
+    (tmp_path / "rotation_status.json").write_text(json.dumps(st))
+    status, sent = cycle([{"properties": live_props(), "geometry": CROWLEY_POLY}])
+    full_body = sent[0][2]
+    assert "Low-level rotation: ELEVATED" in full_body
+    assert "strongest cell INSIDE the warning polygon" in full_body
+    assert "Model ELEVATED." in sent[1][2]              # SMS: state word only
+    assert status["annotation_source"] == "mrms"
+    row = read_decisions(tmp_path)[0]
+    assert (row["model_state"], row["score"], row["threshold"]) == ("elevated", 0.0210, 0.015)
+    assert row["annotation_source"] == "mrms" and row["max_location_near"] == "Crowley"
 
 
 def test_a_daily_cap_suppression_is_recorded(cycle, tmp_path):

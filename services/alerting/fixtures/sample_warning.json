@@ -1,7 +1,33 @@
 {
   "type": "Feature",
   "id": "urn:oid:2.49.0.1.840.0.fixture-do-not-act",
-  "geometry": null,
+  "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+      [
+        [
+          -97.55,
+          32.55
+        ],
+        [
+          -96.52,
+          32.55
+        ],
+        [
+          -96.52,
+          32.99
+        ],
+        [
+          -97.55,
+          32.99
+        ],
+        [
+          -97.55,
+          32.55
+        ]
+      ]
+    ]
+  },
   "properties": {
     "@id": "https://api.weather.gov/alerts/urn:oid:2.49.0.1.840.0.fixture-do-not-act",
     "id": "urn:oid:2.49.0.1.840.0.fixture-do-not-act",
@@ -19,10 +45,10 @@
     "urgency": "Immediate",
     "event": "Tornado Warning",
     "sender": "w-nws.webmaster@noaa.gov",
-    "senderName": "FIXTURE — NWS Fort Worth TX",
+    "senderName": "FIXTURE \u2014 NWS Fort Worth TX",
     "headline": "TEST FIXTURE Tornado Warning until 7:00PM CDT (reaped-whirlwind --test-email)",
-    "description": "TEST FIXTURE — do not act. This is the canned NWS-shaped record reaped-whirlwind's alert_service uses to exercise the email pipeline without waiting for a real warning. A confirmed tornado was located near downtown Fort Worth, moving east at 30 mph.",
-    "instruction": "TEST FIXTURE — do not act. (Real NWS instruction would say: TAKE COVER NOW! Move to a basement or an interior room on the lowest floor of a sturdy building. Avoid windows.)",
+    "description": "TEST FIXTURE \u2014 do not act. This is the canned NWS-shaped record reaped-whirlwind's alert_service uses to exercise the email pipeline without waiting for a real warning. A confirmed tornado was located near downtown Fort Worth, moving east at 30 mph.",
+    "instruction": "TEST FIXTURE \u2014 do not act. (Real NWS instruction would say: TAKE COVER NOW! Move to a basement or an interior room on the lowest floor of a sturdy building. Avoid windows.)",
     "response": "Shelter"
   }
 }

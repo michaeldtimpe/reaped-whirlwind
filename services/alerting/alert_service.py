@@ -25,10 +25,13 @@ Every POLL_INTERVAL seconds:
           Cool-off deferrals are NOT written to the ledger; they retry
           next cycle.
   4. Compose email (full body → ALERT_TO) and SMS (~140 char → ALERT_TO_SMS).
-     NWS text first; for Tornado Warnings, the model state is appended as an
-     annotation (numeric score in the email only; the SMS carries the state
-     word). MODEL_ANNOTATION=off replaces it with "withdrawn" and no score.
-     For non-tornado events the model readout is suppressed ("N/A — model
+     NWS text first; for Tornado Warnings, the radar-rotation state is
+     appended as an annotation: NOAA MRMS 0-2 km azimuthal shear read from
+     ANNOTATION_STATUS_PATH (written by services/rotation). The email carries
+     the number, location, 30-min track max and whether the strongest cell
+     lies inside the warning polygon; the SMS carries the state word only.
+     MODEL_ANNOTATION=off replaces it with "withdrawn" and no score. For
+     non-tornado events the readout is suppressed ("N/A — rotation readout
      assesses tornado risk only").
   5. Send via SMTP. Per-cycle hard cap of 5; deferred alerts retry next cycle.
   6. Append every non-trivial outcome to DECISION_LOG_PATH (month-rotated
@@ -67,7 +70,7 @@ from flask import Flask, jsonify
 # `common` is a package, so its PARENT goes on the path.
 sys.path.insert(0, "/srv/reaped" if Path("/srv/reaped/common").is_dir()
                 else str(Path(__file__).resolve().parents[2]))
-from common import nws
+from common import geo, nws
 from common.jsonlog import append_jsonl
 from common.oplog import setup_logging
 from common.status import atomic_write_json, deep_copy_json, utc_iso
@@ -81,21 +84,34 @@ MAX_SCORE_AGE     = int(os.environ.get("MAX_SCORE_AGE_SECONDS", "1800"))
 KFWS_LAT          = float(os.environ.get("KFWS_LAT",  str(nws.KFWS_LAT)))
 KFWS_LON          = float(os.environ.get("KFWS_LON", str(nws.KFWS_LON)))
 NWS_UA            = os.environ.get("NWS_UA", nws.NWS_USER_AGENT)
-THRESHOLD         = float(os.environ.get("MODEL_RISK_THRESHOLD", "0.8"))
+# Elevated/not-elevated cutoff. The rotation service's status file carries its
+# own `threshold` (single source of truth, 0.015 s^-1 from the Phase 1 backtest);
+# MODEL_RISK_THRESHOLD, when set, overrides it. DEFAULT_THRESHOLD is only the
+# last resort when the status file is missing the key.
+_thr_env          = os.environ.get("MODEL_RISK_THRESHOLD", "").strip()
+THRESHOLD_OVERRIDE = float(_thr_env) if _thr_env else None
+DEFAULT_THRESHOLD = 0.015
 # api.weather.gov returns 502 / times out a few times a day. Retry inside the
 # cycle (attempts = 1 + NWS_RETRIES, NWS_RETRY_BACKOFF_SECONDS between, doubling)
 # rather than losing the whole POLL_INTERVAL; the streak is surfaced in /health.
 NWS_RETRIES       = int(os.environ.get("NWS_RETRIES", "2"))
 NWS_RETRY_BACKOFF = float(os.environ.get("NWS_RETRY_BACKOFF_SECONDS", "3"))
-# MODEL_ANNOTATION=off withdraws the CNN readout from Tornado Warning emails/SMS
-# (state "withdrawn", no score). Set on kappa on 2026-09-06 after the replay smoke
-# test (services/inference/replay_smoke.py) showed models/v1 scores real tornado
-# scans LOWER than quiet sky — see docs/MODEL_CARD.md "Invalidation". The NWS
-# relay is unaffected; the inference service keeps scoring + logging for the
-# retrain comparison. Flip back to "on" only with a model that passes the replay.
+# MODEL_ANNOTATION=off withdraws the readout from Tornado Warning emails/SMS
+# (state "withdrawn", no score). Set to off on kappa on 2026-09-06 when the CNN
+# failed its replay smoke test (docs/MODEL_CARD.md "Invalidation"); it is
+# switched back on at the MRMS cutover (docs/MRMS_MIGRATION.md Phase 4), when
+# ANNOTATION_STATUS_PATH points at the rotation service's status file. The NWS
+# relay is unaffected either way.
 MODEL_ANNOTATION  = os.environ.get("MODEL_ANNOTATION", "on").strip().lower() not in ("off", "0", "false", "no")
 
-INFERENCE_STATUS  = Path(os.environ.get("INFERENCE_STATUS_PATH", "/status/inference_status.json"))
+# The annotation's status file: services/rotation writes /status/rotation_status.json
+# with the same ★ keys the CNN inference service used (status, last_score,
+# last_score_time) plus threshold / max_location / max_track30 /
+# coverage_nonzero_fraction / product. INFERENCE_STATUS_PATH is the deprecated
+# alias from the CNN era — honoured for one release when ANNOTATION_STATUS_PATH is unset.
+ANNOTATION_STATUS = Path(os.environ.get("ANNOTATION_STATUS_PATH")
+                         or os.environ.get("INFERENCE_STATUS_PATH")
+                         or "/status/rotation_status.json")
 DECISION_LOG_PATH = Path(os.environ.get("DECISION_LOG_PATH", "/logs/decisions.jsonl"))
 ALERTS_SENT_PATH  = Path(os.environ.get("ALERTS_SENT_PATH", "/status/alerts_sent.json"))
 STATUS_PATH       = Path(os.environ.get("STATUS_PATH", "/status/alerting_status.json"))
@@ -220,39 +236,75 @@ def filter_to_allowed_events(features, now):
         expires = parse_iso(props.get("expires"))
         if expires is None or expires <= now:
             continue
+        # Keep the alert polygon for the readout's "inside the warning polygon"
+        # line. Private key: nothing else in props starts with "_".
+        props = dict(props)
+        props["_geometry"] = feat.get("geometry")
         out.append(props)
     return out
 
 
-# ---- model state classification ---------------------------------------------
-def load_inference_status():
-    if not INFERENCE_STATUS.exists():
+# ---- annotation state classification ----------------------------------------
+def load_annotation_status():
+    if not ANNOTATION_STATUS.exists():
         return None
     try:
-        return json.loads(INFERENCE_STATUS.read_text())
+        return json.loads(ANNOTATION_STATUS.read_text())
     except Exception:
         return None
 
 
-def classify_model_state(infer, now, annotation_enabled=None):
+def effective_threshold(status):
+    """MODEL_RISK_THRESHOLD env wins; else the status file's own `threshold`;
+    else DEFAULT_THRESHOLD."""
+    if THRESHOLD_OVERRIDE is not None:
+        return THRESHOLD_OVERRIDE
+    try:
+        t = (status or {}).get("threshold")
+        return float(t) if t is not None else DEFAULT_THRESHOLD
+    except (TypeError, ValueError):
+        return DEFAULT_THRESHOLD
+
+
+def classify_model_state(status, now, annotation_enabled=None):
     """Return (state_label, score, threshold, score_age_seconds). Labels:
     'elevated', 'not elevated', 'unavailable', or 'withdrawn' when the
     annotation is switched off (MODEL_ANNOTATION=off) — no score is surfaced
-    then, so a known-bad model can never colour an email."""
+    then, so a known-bad annotation can never colour an email. `score` is the
+    domain-max 0-2 km azimuthal shear in s^-1; `score_age` is measured from the
+    product's valid time."""
     enabled = MODEL_ANNOTATION if annotation_enabled is None else annotation_enabled
+    threshold = effective_threshold(status)
     if not enabled:
-        return "withdrawn", None, THRESHOLD, None
-    if not infer:
-        return "unavailable", None, THRESHOLD, None
-    score = infer.get("last_score")
-    if score is None or infer.get("status") in (None, "uninitialized", "error"):
-        return "unavailable", None, THRESHOLD, None
-    score_time = parse_iso(infer.get("last_score_time"))
+        return "withdrawn", None, threshold, None
+    if not status:
+        return "unavailable", None, threshold, None
+    score = status.get("last_score")
+    if score is None or status.get("status") in (None, "uninitialized", "error"):
+        return "unavailable", None, threshold, None
+    score_time = parse_iso(status.get("last_score_time"))
     age = int((now - score_time).total_seconds()) if score_time else None
-    if age is None or age > MAX_SCORE_AGE or infer.get("status") == "stale":
-        return "unavailable", score, THRESHOLD, age
-    label = "elevated" if score >= THRESHOLD else "not elevated"
-    return label, score, THRESHOLD, age
+    if age is None or age > MAX_SCORE_AGE or status.get("status") == "stale":
+        return "unavailable", score, threshold, age
+    label = "elevated" if score >= threshold else "not elevated"
+    return label, score, threshold, age
+
+
+def annotation_details(status):
+    """The readout's extra lines, lifted from the rotation status file. Every
+    key is present (None when the file lacks it) so the readout never KeyErrors
+    on an older status file."""
+    s = status or {}
+    loc = s.get("max_location") if isinstance(s.get("max_location"), dict) else None
+    return {
+        "source":     "mrms" if s.get("product") else ("cnn" if s.get("scan_delta_seconds") is not None else None),
+        "product":    s.get("product"),
+        "valid_time": s.get("product_valid_time") or s.get("last_score_time"),
+        "location":   loc,
+        "track30":    s.get("max_track30"),
+        "coverage":   s.get("coverage_nonzero_fraction"),
+        "cells_ge_threshold": s.get("cells_ge_threshold"),
+    }
 
 
 # ---- ledger queries (suppression) -------------------------------------------
@@ -356,63 +408,110 @@ def decide_alert(props, ledger, sent_ids, now, *, sent_this_cycle=0,
 
 
 # ---- email composition (mechanical/numeric language only) --------------------
-def _tornado_model_readout(model_state, score, threshold, score_age, scan_delta):
-    score_str      = f"{score:.2f}" if score is not None else "—"
+def _fmt_shear(v):
+    return f"{v:.4f} s^-1" if v is not None else "—"
+
+
+def _location_line(loc):
+    """'near Crowley, 14 km SW of KFWS' from the status file's max_location."""
+    if not loc:
+        return None
+    near, km, bearing = loc.get("near"), loc.get("km"), loc.get("bearing")
+    parts = []
+    if near:
+        parts.append(f"near {near}")
+    if km is not None and bearing:
+        parts.append(f"{km:.0f} km {bearing} of KFWS")
+    elif km is not None:
+        parts.append(f"{km:.0f} km from KFWS")
+    return ", ".join(parts) if parts else None
+
+
+def polygon_check(loc, geometry):
+    """(label, inside) for the readout: inside is True/False/None per common.geo."""
+    if not loc or loc.get("lat") is None or loc.get("lon") is None:
+        return "polygon check n/a (no rotation cell)", None
+    inside = geo.point_in_geometry(loc.get("lat"), loc.get("lon"), geometry)
+    if inside is None:
+        return "polygon unavailable", None
+    return ("INSIDE the warning polygon" if inside else "OUTSIDE the warning polygon"), inside
+
+
+def _tornado_model_readout(model_state, score, threshold, score_age, details=None, geometry=None):
+    """The MRMS rotation block of a Tornado Warning email. Mechanical wording
+    only: numbers, places, distances — never 'agrees', 'sees', 'tornadic'."""
+    d = details or {}
+    loc = d.get("location")
+    coverage = d.get("coverage")
+    score_str      = _fmt_shear(score)
+    threshold_str  = _fmt_shear(threshold)
     score_age_str  = f"{score_age}s" if score_age is not None else "—"
-    scan_delta_str = f"{scan_delta}s" if scan_delta is not None else "—"
+    valid_str      = d.get("valid_time") or "—"
+    track_str      = _fmt_shear(d.get("track30")) if d.get("track30") is not None else "—"
+    where          = _location_line(loc) or "—"
 
     if model_state == "elevated":
-        readout = ("Score at or above threshold: radar features in this scan reach "
-                   "the model's tornadic-structure cutoff. This is NOT confirmation "
-                   "of a tornado on the ground — it is a single-frame radar-morphology "
-                   "score.")
+        readout = ("Azimuthal shear at or above threshold: at least one 0-2 km grid "
+                   "cell within 100 km of KFWS reached the rotation cutoff. This is "
+                   "NOT confirmation of a tornado on the ground — it is a single-"
+                   "frame low-level rotation reading.")
     elif model_state == "not elevated":
-        readout = ("Score below threshold: radar features in this scan did not reach "
-                   "the model's tornadic-structure cutoff. This does NOT reduce the "
-                   "threat. Heed NWS guidance.")
+        readout = ("Azimuthal shear below threshold: no 0-2 km grid cell within "
+                   "100 km of KFWS reached the rotation cutoff in this frame. This "
+                   "does NOT reduce the threat. Heed NWS guidance.")
     elif model_state == "withdrawn":
-        readout = ("Model annotation WITHDRAWN: the current model failed its replay "
-                   "validation and is not being reported until it is retrained. "
-                   "Treat this email as a direct relay of the NWS warning above.")
+        readout = ("Annotation WITHDRAWN: the radar annotation is switched off and "
+                   "is not being reported. Treat this email as a direct relay of "
+                   "the NWS warning above.")
     else:
-        readout = "Model readout suppressed (see note below)."
+        readout = "Rotation readout suppressed (see note below)."
+
+    if model_state == "withdrawn":
+        return ("EXPERIMENTAL RADAR ROTATION READOUT — withdrawn.\n\n"
+                f"{readout}\n")
 
     stale_notice = ""
     if model_state == "unavailable":
         if score is not None and score_age and score_age > MAX_SCORE_AGE:
-            stale_notice = (f"\nNote: most recent radar scan available to the model is "
-                            f"{score_age}s old (>{MAX_SCORE_AGE}s threshold). "
-                            "The model readout is suppressed.\n")
+            stale_notice = (f"\nNote: most recent MRMS frame is {score_age}s old "
+                            f"(>{MAX_SCORE_AGE}s threshold). The readout is suppressed.\n")
         else:
-            stale_notice = "\nNote: the model has no recent score (service may be starting up).\n"
+            stale_notice = "\nNote: no recent MRMS frame (rotation service may be starting up or NCEP is behind).\n"
 
-    if model_state == "withdrawn":
-        return ("EXPERIMENTAL MODEL READOUT — withdrawn.\n\n"
-                f"{readout}\n")
+    extra = ""
+    if model_state in ("elevated", "not elevated"):
+        if coverage is not None and coverage == 0:
+            extra = "  Signal:    no rotation signal in domain (radar coverage unverified)\n"
+        else:
+            label, _ = polygon_check(loc, geometry)
+            extra = (f"  Location:  {where}\n"
+                     f"  Polygon:   strongest cell {label}\n"
+                     f"  30-min max: {track_str}\n")
 
     return (
-        "EXPERIMENTAL MODEL READOUT — informational only, NOT an alert.\n\n"
-        f"Radar-signature confidence: {model_state.upper()}\n"
-        f"  Score:     {score_str}\n"
-        f"  Threshold: {threshold:.2f}\n"
-        f"  Radar age: {score_age_str}\n"
-        f"  N0B/N0S Δ: {scan_delta_str}\n\n"
+        "RADAR ROTATION READOUT (NOAA MRMS, experimental annotation) — informational only, NOT an alert.\n\n"
+        f"Low-level rotation: {model_state.upper()}\n"
+        f"  Max 0-2 km azimuthal shear: {score_str}\n"
+        f"  Threshold: {threshold_str}\n"
+        f"  Valid:     {valid_str} ({score_age_str} ago)\n"
+        f"{extra}\n"
         f"{readout}\n"
         f"{stale_notice}"
     )
 
 
 _NON_TORNADO_MODEL_READOUT = (
-    "EXPERIMENTAL MODEL READOUT — not applicable.\n\n"
-    "The companion CNN scores tornadic radar signatures on KFWS only.\n"
-    "It does not assess this event type. Treat this email as a direct\n"
-    "relay of the NWS warning above.\n"
+    "RADAR ROTATION READOUT — not applicable.\n\n"
+    "The companion readout reports NOAA MRMS low-level azimuthal shear\n"
+    "near KFWS only. It does not assess this event type. Treat this email\n"
+    "as a direct relay of the NWS warning above.\n"
 )
 
 
-def compose_email(props, event_type, model_state, score, threshold, score_age, scan_delta):
+def compose_email(props, event_type, model_state, score, threshold, score_age, details=None):
     """Returns (subject, body). No 'agrees'/'sees'/'tornadic' language for the
-    model readout. For non-tornado events the model readout is N/A."""
+    rotation readout. For non-tornado events the readout is N/A. `details`
+    is `annotation_details()`; the warning polygon comes from props['_geometry']."""
     area        = props.get("areaDesc")    or "—"
     headline    = props.get("headline")    or event_type
     description = props.get("description") or "—"
@@ -421,8 +520,9 @@ def compose_email(props, event_type, model_state, score, threshold, score_age, s
     expires     = props.get("expires")     or "—"
 
     if event_type == "Tornado Warning":
-        subject     = f"Tornado Warning: {area} (model: {model_state})"
-        model_block = _tornado_model_readout(model_state, score, threshold, score_age, scan_delta)
+        subject     = f"Tornado Warning: {area} (rotation: {model_state})"
+        model_block = _tornado_model_readout(model_state, score, threshold, score_age,
+                                             details, props.get("_geometry"))
     else:
         subject     = f"{event_type}: {area}"
         model_block = _NON_TORNADO_MODEL_READOUT
@@ -441,7 +541,7 @@ def compose_email(props, event_type, model_state, score, threshold, score_age, s
         f"{model_block}\n"
         "This email is an automatic relay of an active NWS warning.\n"
         "The NWS guidance above is the authority. Heed it regardless of any\n"
-        "model annotation.\n"
+        "radar annotation.\n"
     )
     return subject, body
 
@@ -521,7 +621,7 @@ def save_ledger(rows, now):
 # ---- decision log ------------------------------------------------------------
 def log_decision(outcome, now, *, props=None, event_type=None, model_state=None,
                  score=None, threshold=None, reason=None, recipients_ok=None,
-                 recipients_failed=None, error=None):
+                 recipients_failed=None, error=None, details=None):
     """Append one decision to DECISION_LOG_PATH (month-rotated). Durable history:
     alerts_sent.json is pruned to LEDGER_PRUNE_HOURS, so it can never answer
     "was this email ever sent?". Never raises; never affects emails_sent_total."""
@@ -541,6 +641,8 @@ def log_decision(outcome, now, *, props=None, event_type=None, model_state=None,
         "recipients_ok":     recipients_ok or [],
         "recipients_failed": recipients_failed or [],
         "error":             error,
+        "annotation_source": (details or {}).get("source"),
+        "max_location_near": ((details or {}).get("location") or {}).get("near"),
     })
 
 
@@ -569,6 +671,8 @@ class State:
             "cool_off_seconds": COOL_OFF_SECONDS,
             "daily_cap_seconds": DAILY_CAP_SECONDS,
             "model_annotation": "on" if MODEL_ANNOTATION else "off",
+            "annotation_status_path": str(ANNOTATION_STATUS),
+            "annotation_source": None,
             "nws_consecutive_failures": 0,
             "nws_last_attempts": None,
             "errors": [],
@@ -611,9 +715,9 @@ def run_cycle(state: State) -> dict:
         return status
 
     active = filter_to_allowed_events(features, now)
-    infer = load_inference_status()
-    model_state, score, thr, score_age = classify_model_state(infer, now)
-    scan_delta = (infer or {}).get("scan_delta_seconds")
+    ann = load_annotation_status()
+    model_state, score, thr, score_age = classify_model_state(ann, now)
+    details = annotation_details(ann)
 
     ledger = load_ledger()
     sent_ids = {r["alert_id"] for r in ledger if r.get("alert_id")}
@@ -656,7 +760,7 @@ def run_cycle(state: State) -> dict:
                 "reason":           decision.reason,
             })
             log_decision("suppressed_daily_cap", now, props=props, event_type=event_type,
-                         model_state=model_state, score=score, threshold=thr,
+                         model_state=model_state, score=score, threshold=thr, details=details,
                          reason=decision.reason)
             sent_ids.add(alert_id)
             suppressed_daily += 1
@@ -668,13 +772,13 @@ def run_cycle(state: State) -> dict:
                                f"deferred alert_id={alert_id} ({event_type}); "
                                f"{decision.reason}")
             log_decision("deferred_cool_off", now, props=props, event_type=event_type,
-                         model_state=model_state, score=score, threshold=thr,
+                         model_state=model_state, score=score, threshold=thr, details=details,
                          reason=decision.reason)
             deferred_cool_off += 1
             continue
 
         # Send.
-        full_subj, full_body = compose_email(props, event_type, model_state, score, thr, score_age, scan_delta)
+        full_subj, full_body = compose_email(props, event_type, model_state, score, thr, score_age, details)
         sms_subj,  sms_body  = compose_sms(props, event_type, model_state, score, thr)
         messages = ([(r, full_subj, full_body) for r in ALERT_TO_FULL]
                     + [(r, sms_subj, sms_body) for r in ALERT_TO_SMS])
@@ -690,7 +794,7 @@ def run_cycle(state: State) -> dict:
         if not any_ok:
             state.record_error("smtp", f"alert_id={alert_id}: all sends failed: {failed}")
             log_decision("smtp_error", now, props=props, event_type=event_type,
-                         model_state=model_state, score=score, threshold=thr,
+                         model_state=model_state, score=score, threshold=thr, details=details,
                          recipients_failed=[{"to": r, "err": e} for r, e in failed],
                          error="all sends failed")
             new_status = "smtp_error"
@@ -711,7 +815,7 @@ def run_cycle(state: State) -> dict:
             "recipients_failed": [{"to": r, "err": e} for r, e in failed],
         })
         log_decision("sent", now, props=props, event_type=event_type,
-                     model_state=model_state, score=score, threshold=thr,
+                     model_state=model_state, score=score, threshold=thr, details=details,
                      recipients_ok=[r for r, e in results if e is None],
                      recipients_failed=[{"to": r, "err": e} for r, e in failed])
         sent_ids.add(alert_id)
@@ -727,6 +831,7 @@ def run_cycle(state: State) -> dict:
     status["status"] = new_status
     status["last_poll_time"] = utc_iso(now)
     status["active_warnings"] = len(active)
+    status["annotation_source"] = details.get("source")
     status["active_tornado_warnings"] = by_type.get("Tornado Warning", 0)
     status["active_by_type"] = by_type
     status["emails_sent_total"] = status.get("emails_sent_total", 0) + sent_this_cycle
@@ -778,12 +883,15 @@ def _load_fixture_for_event(event_type):
     candidate = FIXTURE_DIR / f"sample_{safe}.json"
     if candidate.exists():
         data = json.loads(candidate.read_text())
-        return data.get("properties", data), candidate
+        props = dict(data.get("properties", data))
+        props["_geometry"] = data.get("geometry")
+        return props, candidate
     legacy = FIXTURE_DIR / "sample_warning.json"
     if not legacy.exists():
         raise FileNotFoundError(f"No fixture found for {event_type} (tried {candidate}, {legacy})")
     data = json.loads(legacy.read_text())
     props = dict(data.get("properties", data))
+    props["_geometry"] = data.get("geometry")
     props["event"] = event_type
     props["headline"] = f"TEST FIXTURE {event_type} (no per-event fixture; legacy fallback)"
     return props, legacy
@@ -796,12 +904,12 @@ def test_email_main(event_type: str, dry_run: bool):
         sys.stderr.write(f"FATAL: {e}\n")
         sys.exit(1)
 
-    infer = load_inference_status()
+    ann = load_annotation_status()
     now = datetime.now(timezone.utc)
-    model_state, score, thr, score_age = classify_model_state(infer, now)
-    scan_delta = (infer or {}).get("scan_delta_seconds")
+    model_state, score, thr, score_age = classify_model_state(ann, now)
+    details = annotation_details(ann)
 
-    full_subj, full_body = compose_email(props, event_type, model_state, score, thr, score_age, scan_delta)
+    full_subj, full_body = compose_email(props, event_type, model_state, score, thr, score_age, details)
     sms_subj,  sms_body  = compose_sms(props, event_type, model_state, score, thr)
 
     if dry_run:

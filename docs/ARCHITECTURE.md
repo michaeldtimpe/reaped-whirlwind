@@ -16,8 +16,11 @@ weather ──txt──> weather-reports/  (NWS bulletins + alerts)            �
 
                                   inference fetches its own IEM data so the live
                                   pipeline matches the training pipeline byte-for-byte.
-IEM RIDGE KFWS N0B+N0S ─────► inference ──► service-status/inference_status.json
+NOAA MRMS 0-2 km AzShear ───► rotation ──► service-status/rotation_status.json
+  (NCEP, S3 fallback; 2 min)                    + rotation-logs/rotation-YYYYMM.jsonl
                                                                                 │
+IEM RIDGE KFWS N0B+N0S ─────► inference ──► service-status/inference_status.json│
+  (CNN; `cnn` compose profile, off by default — superseded, research only)      │
                                                                                 ▼
 NWS /alerts/active ─────► alerting ──► email + SMS (SMTP) ──► you
                           Filter: event ∈ ALLOWED_EVENTS (warnings only by default).
@@ -37,17 +40,25 @@ NWS /alerts/active ─────► alerting ──► email + SMS (SMTP) ─�
   `weather-reports/`. Config (region/lat/lon/UA/interval) via env.
 - **dashboard** (Flask): reads status JSONs + Docker API; serves UI (9007); can stop/start (Docker
   API) and rebuild (`docker-compose -p reaped-whirlwind up -d --build <service>`) each service.
-- **inference** (Python, torch CPU, port 9008): every 5 min, fetches the latest KFWS N0B + N0S
-  from IEM RIDGE directly, applies the **same** `ml/preprocess.decode_crop` used in training, runs
-  the CNN at `models/v1/model.pt`, writes `service-status/inference_status.json`. Refuses to start
-  on model SHA / `preprocess_version` mismatch. Does NOT alert.
+- **rotation** (Python, eccodes, port 9010): every 2 min, fetches the latest NOAA MRMS
+  `MergedAzShear_0-2kmAGL` GRIB2 (NCEP, S3 fallback), decodes it, masks a 100 km disc around KFWS
+  (5 km radar-exclusion), and writes `service-status/rotation_status.json` (`last_score` = domain
+  max azimuthal shear in s⁻¹, `threshold`, `max_location` {lat, lon, km, bearing, near},
+  `max_track30`, `coverage_nonzero_fraction`, `top_cells`) plus one JSONL row per cycle. Does NOT
+  alert. See `docs/MRMS_MIGRATION.md`.
+- **inference** (Python, torch CPU, port 9008; compose profile `cnn`, **not started by default**):
+  the superseded CNN annotation. Every 5 min, fetches the latest KFWS N0B + N0S from IEM RIDGE,
+  applies the **same** `ml/preprocess.decode_crop` used in training, runs the CNN at
+  `models/v1/model.pt`, writes `service-status/inference_status.json`. Kept for research.
 - **alerting** (Python, port 9009): every 5 min, GETs NWS `/alerts/active` for the KFWS point,
   filters to active alerts whose `event` is in `ALLOWED_EVENTS` (default: eight standard severe-
   weather Warnings — Tornado, Severe Thunderstorm, Flash Flood, Flood, High Wind, Winter Storm, Ice
   Storm, Extreme Wind — watches/advisories opt-in via `.env`). For each unseen alert, composes an
   email (full body to `ALERT_TO`) and an SMS (~140-char body to `ALERT_TO_SMS`) with the NWS text
-  first; Tornado Warnings additionally carry the model score as a numeric annotation, other event
-  types show "model readout N/A — CNN assesses tornado risk only." Sends via SMTP. Layered
+  first; Tornado Warnings additionally carry the rotation readout (from `ANNOTATION_STATUS_PATH`,
+  the rotation service's status file: max shear vs threshold, location, 30-min max, and whether the
+  strongest cell is inside the warning polygon via `common/geo.py`); other event types show
+  "rotation readout — not applicable." Sends via SMTP. Layered
   suppression: (a) dedupe by `alert_id` in `service-status/alerts_sent.json` (one notification per
   id, ever); (b) per-event-type rolling 24 h cap (`DAILY_CAP_SECONDS`); suppressed rows are stored
   with `outcome=suppressed_daily_cap`, and events in `DAILY_CAP_BYPASS_EVENTS` skip the cap
@@ -136,13 +147,14 @@ training tensors. Inference imports `decode_crop`, `load_wld`, `REFL`, `VEL`, `P
 directly from `ml/preprocess.py`; the model is loaded with `weights_only=True` from
 `models/v1/model.pt`.
 
-**Alerting** (Part C, done): NWS warning is primary, unconditional, independent. The model is
-permanently experimental; its score is a numeric annotation on Tornado Warning emails only. For
-other event types in `ALLOWED_EVENTS` the model section reads "N/A — CNN assesses tornado risk on
-KFWS only," and the email/SMS is a direct relay of the NWS text. Tornado Warning email subject is
-`Tornado Warning: <area> (model: elevated|not elevated|unavailable)`. Body has the full NWS text
-first and the model readout below in mechanical language ("score below threshold", "radar features
-did not reach cutoff") — no "agrees/disagrees/sees" phrasing.
+**Alerting** (Part C, done): NWS warning is primary, unconditional, independent. The annotation is
+permanently experimental; it is a numeric readout on Tornado Warning emails only. For other event
+types in `ALLOWED_EVENTS` the readout section reads "not applicable," and the email/SMS is a direct
+relay of the NWS text. Tornado Warning email subject is
+`Tornado Warning: <area> (rotation: elevated|not elevated|unavailable|withdrawn)`. Body has the
+full NWS text first and the readout below in mechanical language ("azimuthal shear below
+threshold", "strongest cell OUTSIDE the warning polygon") — no "agrees/disagrees/sees" phrasing.
+The SMS carries the state word only.
 
 Anti-spam: one notification per `alert_id` (ever), one per event type per rolling 24 h, one per 30
 min globally — with Tornado Warning bypassing the 30-min cool-off so a tornado after a flood is

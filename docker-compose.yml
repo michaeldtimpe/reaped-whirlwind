@@ -122,6 +122,10 @@ services:
     image: reaped-whirlwind-inference
     container_name: inference-service
     restart: unless-stopped
+    # Superseded by `rotation` (docs/MRMS_MIGRATION.md Phase 4). Not started by
+    # default; `docker-compose --profile cnn up -d inference` brings it back for
+    # research. models/v1 stays in git.
+    profiles: ["cnn"]
     environment:
       - TZ=${TZ:-America/Chicago}
       - PUID=${PUID:-106808}
@@ -227,7 +231,10 @@ services:
       - KFWS_LAT=${KFWS_LAT:-32.5728}
       - KFWS_LON=${KFWS_LON:--97.3031}
       - NWS_UA=${NWS_UA:-(reaped-whirlwind alerting, alert@example.com)}
-      - MODEL_RISK_THRESHOLD=${MODEL_RISK_THRESHOLD:-0.8}
+      # Elevated cutoff for the rotation readout. Unset ⇒ the rotation service's
+      # own `threshold` from its status file (0.015 s^-1, Phase 1 backtest) is
+      # used; set only to override it. (The CNN era defaulted this to 0.8.)
+      - MODEL_RISK_THRESHOLD=${MODEL_RISK_THRESHOLD:-}
       # Override knob only — the canonical default allowlist lives in common/nws.py
       # (DEFAULT_ALLOWED_EVENTS). Keep this literal in sync if you edit it here.
       - ALLOWED_EVENTS=${ALLOWED_EVENTS:-Tornado Warning,Severe Thunderstorm Warning,Flash Flood Warning,Flood Warning,High Wind Warning,Winter Storm Warning,Ice Storm Warning,Extreme Wind Warning}
@@ -242,11 +249,10 @@ services:
       # Retry api.weather.gov 502s/timeouts inside the cycle (retrospective #6).
       - NWS_RETRIES=${NWS_RETRIES:-2}
       - NWS_RETRY_BACKOFF_SECONDS=${NWS_RETRY_BACKOFF_SECONDS:-3}
-      # WITHDRAWN 2026-09-06: models/v1 failed the historical replay smoke test
-      # (scores real tornado scans below quiet sky — a CST/UTC bug in the
-      # training-data collector). Emails/SMS say "withdrawn" and carry no score.
-      # Set to "on" only after a retrained model passes
-      # services/inference/replay_smoke.py. See docs/MODEL_CARD.md.
+      # WITHDRAWN 2026-09-06 when the CNN failed its replay smoke test (see
+      # docs/MODEL_CARD.md). The annotation is now the NOAA MRMS rotation
+      # readout (docs/MRMS_MIGRATION.md); set to "on" at the Phase 4 cutover,
+      # after the Phase 3 shadow review. Emails/SMS say "withdrawn" until then.
       - MODEL_ANNOTATION=${MODEL_ANNOTATION:-off}
       - SMTP_HOST=${SMTP_HOST}
       - SMTP_PORT=${SMTP_PORT:-587}
@@ -255,7 +261,9 @@ services:
       - ALERT_FROM=${ALERT_FROM}
       - ALERT_TO=${ALERT_TO}
       - ALERT_TO_SMS=${ALERT_TO_SMS:-}
-      - INFERENCE_STATUS_PATH=/status/inference_status.json
+      # The annotation's status file — written by the `rotation` service.
+      # (INFERENCE_STATUS_PATH is the deprecated CNN-era alias.)
+      - ANNOTATION_STATUS_PATH=${ANNOTATION_STATUS_PATH:-/status/rotation_status.json}
       - ALERTS_SENT_PATH=/status/alerts_sent.json
       - STATUS_PATH=/status/alerting_status.json
       # Durable outcome history — alerts_sent.json is pruned to 48 h.

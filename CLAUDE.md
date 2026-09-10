@@ -23,10 +23,16 @@ alert — this model is a research layer and will not beat NWS. It stays permane
   Correctly-timed CNN ≈ mean-reflectivity baseline (PR-AUC 0.543 vs 0.536); still scores a
   near-empty night scan 0.62. Annotation remains withdrawn. `scripts/train_and_gate.sh` is
   the one-shot train + eval + gate; `SKIP_TRAIN=1` re-gates `ml/runs/LATEST`.
-- **MRMS migration in progress (2026-09-08/09)** — see `docs/MRMS_MIGRATION.md`. Phase 1 gate
-  PASS at threshold 0.015 s⁻¹; Phase 2 `rotation` service live on kappa `:9010` in shadow
-  (alerting still reads the withdrawn CNN status file, nothing live changed); Phase 3 shadow
-  review in progress, then Phase 4 alerting cutover.
+- **MRMS migration in progress (2026-09-08 → )** — see `docs/MRMS_MIGRATION.md`. Phase 1 gate
+  PASS at threshold 0.015 s⁻¹; Phase 2 `rotation` service live on kappa `:9010` in shadow.
+  **Phase 3 shadow running** (interim review 2026-09-10: 1385/1385 cycles healthy, 4 threshold
+  exceedances, all sub-0.1 %-coverage specks, no NWS warning at the point). **Phase 4 code is
+  DONE in the repo (2026-09-10) but NOT deployed**: alerting now reads `ANNOTATION_STATUS_PATH`
+  (rotation status), renders the MRMS readout with a polygon check (`common/geo.py`), and
+  `inference` sits under the `cnn` compose profile. Kappa still runs the pre-Phase-4 alerting
+  (CNN status file, `MODEL_ANNOTATION=off`, "withdrawn"). Cutover gate: S7 (earliest
+  2026-09-22 + ≥1 SV.W day in the shadow log); checklist in `docs/MRMS_MIGRATION.md` "Phase 4 —
+  code". Gotcha: kappa `.env` has `MODEL_RISK_THRESHOLD=0.8` — must be blanked at cutover.
 - **Part A — DONE & deployed.** The four services (screenshot / processor / weather / dashboard) are
   unified into ONE compose project **`reaped-whirlwind`**, live on the **kappa** NAS at
   `/volume1/docker/reaped-whirlwind` (ports 9005 processor / 9006 weather / 9007 dashboard).
@@ -108,7 +114,8 @@ tuning notes.
 docker-compose.yml         # unified stack (kappa); now 7 services
 services/ screenshot/ processor/ weather/ dashboard/ inference/ alerting/ rotation/
 common/                     # shared package: status-file + NWS helpers (KFWS coords, default
-                             # event allowlist) — single source of truth, used by inference+alerting
+                             # event allowlist), places table, geo.py point-in-polygon — used by
+                             # rotation + alerting (+ the profile-gated inference)
 tests/                      # pytest suite; run via scripts/test.sh
 scripts/ test.sh            # test entry point
 data-tools/ collect.py iem.py run_collection.sh README.md      # Part B data collection

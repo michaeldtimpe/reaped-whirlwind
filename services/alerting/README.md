@@ -4,9 +4,14 @@ NWS-gated multi-event alerter for **reaped-whirlwind**. Sends one email + one
 SMS per active NWS warning whose `event` is in `ALLOWED_EVENTS` (default: the
 eight standard severe-weather Warnings most relevant in DFW — Tornado, Severe
 Thunderstorm, Flash Flood, Flood, High Wind, Winter Storm, Ice Storm, Extreme
-Wind). Tornado Warning emails additionally carry the experimental CNN's score
-as a numeric annotation; for other event types the model section reads
-"N/A — CNN assesses tornado risk only." The model never originates an alert.
+Wind). Tornado Warning emails additionally carry the experimental **radar
+rotation readout** — NOAA MRMS 0-2 km azimuthal shear from the `rotation`
+service: max shear vs threshold, valid time, location ("near Crowley, 14 km
+WSW of KFWS"), 30-min track max, and whether the strongest cell is inside the
+warning polygon (`common/geo.py`). For other event types the readout section
+reads "not applicable." The SMS carries the state word only. The annotation
+never originates an alert. (The CNN annotation it replaced is described in
+`docs/MODEL_CARD.md`; `docs/MRMS_MIGRATION.md` is the migration record.)
 
 ## How to run locally
 ```
@@ -93,8 +98,9 @@ Atomically written to `/status/alerting_status.json`.
 | `ALERT_FROM` | unset | From: address |
 | `ALERT_TO` | unset | comma-separated full-body recipients |
 | `ALERT_TO_SMS` | unset | comma-separated SMS-gateway recipients (short body) |
-| `MODEL_RISK_THRESHOLD` | from `.env` | Tornado Warning annotation threshold |
-| `INFERENCE_STATUS_PATH` | `/status/inference_status.json` | input from inference service |
+| `MODEL_RISK_THRESHOLD` | unset | override of the rotation status file's own `threshold` (0.015 s⁻¹); leave unset |
+| `ANNOTATION_STATUS_PATH` | `/status/rotation_status.json` | input from the rotation service (`INFERENCE_STATUS_PATH` is the deprecated CNN-era alias) |
+| `MODEL_ANNOTATION` | on | `off` ⇒ readout "withdrawn", no number anywhere |
 | `ALERTS_SENT_PATH` | `/status/alerts_sent.json` | ledger |
 | `STATUS_PATH` | `/status/alerting_status.json` | output |
 

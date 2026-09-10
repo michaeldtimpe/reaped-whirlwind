@@ -1,6 +1,11 @@
 # Model Card — tornado-risk CNN (reaped-whirlwind, Part B)
 
-**Status: INVALIDATED 2026-09-06 — annotation withdrawn from live alerts; retrain required.**
+**Status: SUPERSEDED (2026-09-10).** The Tornado Warning annotation is now the NOAA MRMS 0-2 km
+azimuthal-shear readout from the `rotation` service — an operational NOAA product, not a learned
+model — per `docs/MRMS_MIGRATION.md`. The inference service lives under the `cnn` compose profile
+(not started by default) and `models/v1` stays in git for research. Nothing below is deployed.
+
+**Prior status: INVALIDATED 2026-09-06 — annotation withdrawn from live alerts; retrain required.**
 `models/v1/` is still what the inference service loads (so scores keep being logged for the
 before/after comparison), but `MODEL_ANNOTATION=off` on kappa means no email or SMS carries
 its readout. Everything below the next section describes the model as it was evaluated and is
